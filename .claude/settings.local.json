@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.microsoft.com)",
+      "WebSearch",
+      "Bash(dotnet --version)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(dotnet nuget:*)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet run:*)",
+      "Read(//c/Users/afroze.amjad/.nuget/packages/system.commandline/2.0.5/**)",
+      "Bash(grep -A5 \"Argument\\\\`1\" /c/Users/afroze.amjad/.nuget/packages/system.commandline/2.0.5/lib/net8.0/System.CommandLine.xml)",
+      "Bash(grep -A10 \"Option\\\\`1.*#ctor\" /c/Users/afroze.amjad/.nuget/packages/system.commandline/2.0.5/lib/net8.0/System.CommandLine.xml)",
+      "Bash(dotnet pack:*)",
+      "Bash(dotnet tool:*)",
+      "Bash(graph-cli --help)"
+    ]
+  }
+}
