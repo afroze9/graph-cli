@@ -23,6 +23,7 @@ public static class MailCommands
         mailCommand.Subcommands.Add(BuildMove(formatOption));
         mailCommand.Subcommands.Add(BuildDelete(formatOption));
         mailCommand.Subcommands.Add(BuildFolders(formatOption));
+        mailCommand.Subcommands.Add(BuildMarkRead(formatOption));
 
         return mailCommand;
     }
@@ -338,6 +339,34 @@ public static class MailCommands
                 var client = await GraphClientProvider.CreateAsync();
                 await client.Me.Messages[messageId].DeleteAsync(cancellationToken: ct);
                 OutputService.Print(new { status = "deleted", messageId });
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildMarkRead(Option<string> formatOption)
+    {
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
+        var unreadOption = new Option<bool>("--unread") { Description = "Mark as unread instead of read" };
+        var cmd = new Command("mark-read", "Mark a message as read or unread") { messageIdArg, unreadOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var messageId = parseResult.GetValue(messageIdArg)!;
+            var unread = parseResult.GetValue(unreadOption);
+            var isRead = !unread;
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                await client.Me.Messages[messageId].PatchAsync(new Message
+                {
+                    IsRead = isRead
+                }, cancellationToken: ct);
+                OutputService.Print(new { status = isRead ? "marked_read" : "marked_unread", messageId });
             }
             catch (ODataError ex)
             {

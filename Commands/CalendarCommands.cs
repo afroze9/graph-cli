@@ -1,6 +1,9 @@
 using System.CommandLine;
+using System.Xml;
 using GraphCli.Services;
 using Microsoft.Graph;
+using Microsoft.Graph.Me.Calendar.GetSchedule;
+using Microsoft.Graph.Me.FindMeetingTimes;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
@@ -18,6 +21,8 @@ public static class CalendarCommands
         calendarCommand.Subcommands.Add(BuildUpdateEvent(formatOption));
         calendarCommand.Subcommands.Add(BuildDeleteEvent(formatOption));
         calendarCommand.Subcommands.Add(BuildRespond(formatOption));
+        calendarCommand.Subcommands.Add(BuildFindTimes(formatOption));
+        calendarCommand.Subcommands.Add(BuildSchedule(formatOption));
 
         return calendarCommand;
     }
@@ -83,7 +88,7 @@ public static class CalendarCommands
                         r.QueryParameters.StartDateTime = start;
                         r.QueryParameters.EndDateTime = end;
                         r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus"];
+                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
                     }, ct);
                 }
@@ -94,7 +99,7 @@ public static class CalendarCommands
                         r.QueryParameters.StartDateTime = start;
                         r.QueryParameters.EndDateTime = end;
                         r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus"];
+                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
                     }, ct);
                 }
@@ -111,7 +116,8 @@ public static class CalendarCommands
                     Organizer = e.Organizer?.EmailAddress?.Address,
                     e.IsAllDay,
                     e.IsCancelled,
-                    Response = e.ResponseStatus?.Response?.ToString()
+                    Response = e.ResponseStatus?.Response?.ToString(),
+                    Categories = e.Categories
                 }).ToList();
                 OutputService.Print(results, format);
             }
@@ -131,9 +137,10 @@ public static class CalendarCommands
         var endOption = new Option<string>("--end") { Description = "End datetime (ISO 8601)", Required = true };
         var attendeesOption = new Option<string?>("--attendees") { Description = "Comma-separated attendee emails" };
         var bodyOption = new Option<string?>("--body") { Description = "Event body/description" };
+        var categoriesOption = new Option<string?>("--categories") { Description = "Comma-separated category names" };
         var calendarIdOption = new Option<string?>("--calendar-id") { Description = "Calendar ID (default: primary)" };
         var cmd = new Command("create-event", "Create a calendar event")
-            { subjectOption, startOption, endOption, attendeesOption, bodyOption, calendarIdOption };
+            { subjectOption, startOption, endOption, attendeesOption, bodyOption, categoriesOption, calendarIdOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var subject = parseResult.GetValue(subjectOption)!;
@@ -141,6 +148,7 @@ public static class CalendarCommands
             var end = parseResult.GetValue(endOption)!;
             var attendees = parseResult.GetValue(attendeesOption);
             var body = parseResult.GetValue(bodyOption);
+            var categories = parseResult.GetValue(categoriesOption);
             var calendarId = parseResult.GetValue(calendarIdOption);
 
             try
@@ -164,6 +172,9 @@ public static class CalendarCommands
                         Type = AttendeeType.Required
                     }).ToList();
                 }
+
+                if (!string.IsNullOrEmpty(categories))
+                    newEvent.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
                 Event? created;
                 if (!string.IsNullOrEmpty(calendarId))
@@ -189,7 +200,8 @@ public static class CalendarCommands
         var startOption = new Option<string?>("--start") { Description = "New start datetime" };
         var endOption = new Option<string?>("--end") { Description = "New end datetime" };
         var bodyOption = new Option<string?>("--body") { Description = "New body" };
-        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption };
+        var categoriesOption = new Option<string?>("--categories") { Description = "Comma-separated category names" };
+        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption, categoriesOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var eventId = parseResult.GetValue(eventIdArg)!;
@@ -197,6 +209,7 @@ public static class CalendarCommands
             var start = parseResult.GetValue(startOption);
             var end = parseResult.GetValue(endOption);
             var body = parseResult.GetValue(bodyOption);
+            var categories = parseResult.GetValue(categoriesOption);
 
             try
             {
@@ -207,6 +220,7 @@ public static class CalendarCommands
                 if (start != null) update.Start = new DateTimeTimeZone { DateTime = start, TimeZone = TimeZoneInfo.Local.Id };
                 if (end != null) update.End = new DateTimeTimeZone { DateTime = end, TimeZone = TimeZoneInfo.Local.Id };
                 if (body != null) update.Body = new ItemBody { ContentType = BodyType.Text, Content = body };
+                if (categories != null) update.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
                 var updated = await client.Me.Events[eventId].PatchAsync(update, cancellationToken: ct);
                 OutputService.Print(new { status = "updated", id = updated?.Id });
@@ -289,6 +303,126 @@ public static class CalendarCommands
                         return;
                 }
                 OutputService.Print(new { status = "responded", eventId, action });
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildFindTimes(Option<string> formatOption)
+    {
+        var attendeesOption = new Option<string>("--attendees") { Description = "Comma-separated attendee emails", Required = true };
+        var durationOption = new Option<int>("--duration") { Description = "Meeting duration in minutes", Required = true };
+        var startOption = new Option<string?>("--start") { Description = "Search window start (ISO 8601, default: now)" };
+        var endOption = new Option<string?>("--end") { Description = "Search window end (ISO 8601, default: +7 days)" };
+        var cmd = new Command("find-times", "Find available meeting times for attendees") { attendeesOption, durationOption, startOption, endOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var attendees = parseResult.GetValue(attendeesOption)!;
+            var duration = parseResult.GetValue(durationOption);
+            var start = parseResult.GetValue(startOption) ?? DateTime.Now.ToString("o");
+            var end = parseResult.GetValue(endOption) ?? DateTime.Now.AddDays(7).ToString("o");
+            var tz = TimeZoneInfo.Local.Id;
+
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var result = await client.Me.FindMeetingTimes.PostAsync(new FindMeetingTimesPostRequestBody
+                {
+                    Attendees = attendees.Split(',').Select(e => new AttendeeBase
+                    {
+                        EmailAddress = new EmailAddress { Address = e.Trim() },
+                        Type = AttendeeType.Required
+                    }).ToList(),
+                    TimeConstraint = new TimeConstraint
+                    {
+                        TimeSlots = [new TimeSlot
+                        {
+                            Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
+                            End = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
+                        }]
+                    },
+                    MeetingDuration = XmlConvert.ToTimeSpan($"PT{duration}M"),
+                    ReturnSuggestionReasons = true
+                }, cancellationToken: ct);
+
+                var suggestions = result?.MeetingTimeSuggestions?.Select(s => new
+                {
+                    StartDateTime = s.MeetingTimeSlot?.Start?.DateTime,
+                    StartTimeZone = s.MeetingTimeSlot?.Start?.TimeZone,
+                    EndDateTime = s.MeetingTimeSlot?.End?.DateTime,
+                    EndTimeZone = s.MeetingTimeSlot?.End?.TimeZone,
+                    Confidence = s.Confidence,
+                    OrganizerAvailability = s.OrganizerAvailability?.ToString(),
+                    SuggestionReason = s.SuggestionReason
+                }).ToList();
+
+                if (suggestions == null || suggestions.Count == 0)
+                {
+                    OutputService.Print(new { status = "no_suggestions", reason = result?.EmptySuggestionsReason ?? "unknown" }, format);
+                }
+                else
+                {
+                    OutputService.Print(suggestions, format);
+                }
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildSchedule(Option<string> formatOption)
+    {
+        var usersOption = new Option<string>("--users") { Description = "Comma-separated user emails", Required = true };
+        var startOption = new Option<string>("--start") { Description = "Start datetime (ISO 8601)", Required = true };
+        var endOption = new Option<string>("--end") { Description = "End datetime (ISO 8601)", Required = true };
+        var cmd = new Command("schedule", "Get free/busy schedule for users") { usersOption, startOption, endOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var users = parseResult.GetValue(usersOption)!;
+            var start = parseResult.GetValue(startOption)!;
+            var end = parseResult.GetValue(endOption)!;
+            var tz = TimeZoneInfo.Local.Id;
+
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var result = await client.Me.Calendar.GetSchedule.PostAsGetSchedulePostResponseAsync(
+                    new GetSchedulePostRequestBody
+                    {
+                        Schedules = users.Split(',').Select(e => e.Trim()).ToList(),
+                        StartTime = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
+                        EndTime = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
+                    }, cancellationToken: ct);
+
+                var schedules = result?.Value?.Select(s => new
+                {
+                    User = s.ScheduleId,
+                    AvailabilityView = s.AvailabilityView,
+                    Items = s.ScheduleItems?.Select(i => new
+                    {
+                        Status = i.Status?.ToString(),
+                        Subject = i.Subject,
+                        Location = i.Location,
+                        StartDateTime = i.Start?.DateTime,
+                        StartTimeZone = i.Start?.TimeZone,
+                        EndDateTime = i.End?.DateTime,
+                        EndTimeZone = i.End?.TimeZone,
+                        i.IsPrivate
+                    }).ToList()
+                }).ToList();
+
+                OutputService.Print(schedules, format);
             }
             catch (ODataError ex)
             {
