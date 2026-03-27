@@ -38,7 +38,6 @@ public static class ChatCommands
                 {
                     r.QueryParameters.Top = top;
                     r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime"];
-                    r.QueryParameters.Orderby = ["lastUpdatedDateTime desc"];
                 }, ct);
                 var results = chats?.Value?.Select(c => new
                 {

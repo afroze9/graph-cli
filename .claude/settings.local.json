@@ -15,7 +15,9 @@
       "Bash(grep -A10 \"Option\\\\`1.*#ctor\" /c/Users/afroze.amjad/.nuget/packages/system.commandline/2.0.5/lib/net8.0/System.CommandLine.xml)",
       "Bash(dotnet pack:*)",
       "Bash(dotnet tool:*)",
-      "Bash(graph-cli --help)"
+      "Bash(graph-cli --help)",
+      "Bash(grep -n \"Attendee\\\\|attendee\" /i/source/dotnet/graph-cli/Commands/*.cs)",
+      "Bash(grep -n \"Recipient\\\\|recipients\" /i/source/dotnet/graph-cli/Commands/*.cs)"
     ]
   }
 }
