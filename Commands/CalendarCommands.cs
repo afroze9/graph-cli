@@ -11,18 +11,18 @@ namespace GraphCli.Commands;
 
 public static class CalendarCommands
 {
-    public static Command Build(Option<string> formatOption)
+    public static Command Build(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var calendarCommand = new Command("calendar", "Calendar operations");
 
         calendarCommand.Subcommands.Add(BuildList(formatOption));
-        calendarCommand.Subcommands.Add(BuildEvents(formatOption));
-        calendarCommand.Subcommands.Add(BuildCreateEvent(formatOption));
-        calendarCommand.Subcommands.Add(BuildUpdateEvent(formatOption));
+        calendarCommand.Subcommands.Add(BuildEvents(formatOption, timezoneOption));
+        calendarCommand.Subcommands.Add(BuildCreateEvent(formatOption, timezoneOption));
+        calendarCommand.Subcommands.Add(BuildUpdateEvent(formatOption, timezoneOption));
         calendarCommand.Subcommands.Add(BuildDeleteEvent(formatOption));
         calendarCommand.Subcommands.Add(BuildRespond(formatOption));
-        calendarCommand.Subcommands.Add(BuildFindTimes(formatOption));
-        calendarCommand.Subcommands.Add(BuildSchedule(formatOption));
+        calendarCommand.Subcommands.Add(BuildFindTimes(formatOption, timezoneOption));
+        calendarCommand.Subcommands.Add(BuildSchedule(formatOption, timezoneOption));
 
         return calendarCommand;
     }
@@ -61,7 +61,7 @@ public static class CalendarCommands
         return cmd;
     }
 
-    private static Command BuildEvents(Option<string> formatOption)
+    private static Command BuildEvents(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var startOption = new Option<string?>("--start") { Description = "Start date (ISO 8601, default: today)" };
         var endOption = new Option<string?>("--end") { Description = "End date (ISO 8601, default: +7 days)" };
@@ -75,6 +75,7 @@ public static class CalendarCommands
             var end = parseResult.GetValue(endOption) ?? DateTime.Today.AddDays(7).ToString("o");
             var calendarId = parseResult.GetValue(calendarIdOption);
             var top = parseResult.GetValue(topOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -90,6 +91,7 @@ public static class CalendarCommands
                         r.QueryParameters.Top = top;
                         r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
+                        r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
                     }, ct);
                 }
                 else
@@ -101,6 +103,7 @@ public static class CalendarCommands
                         r.QueryParameters.Top = top;
                         r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
+                        r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
                     }, ct);
                 }
 
@@ -130,7 +133,7 @@ public static class CalendarCommands
         return cmd;
     }
 
-    private static Command BuildCreateEvent(Option<string> formatOption)
+    private static Command BuildCreateEvent(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var subjectOption = new Option<string>("--subject") { Description = "Event subject", Required = true };
         var startOption = new Option<string>("--start") { Description = "Start datetime (ISO 8601)", Required = true };
@@ -150,6 +153,7 @@ public static class CalendarCommands
             var body = parseResult.GetValue(bodyOption);
             var categories = parseResult.GetValue(categoriesOption);
             var calendarId = parseResult.GetValue(calendarIdOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -157,8 +161,8 @@ public static class CalendarCommands
                 var newEvent = new Event
                 {
                     Subject = subject,
-                    Start = new DateTimeTimeZone { DateTime = start, TimeZone = TimeZoneInfo.Local.Id },
-                    End = new DateTimeTimeZone { DateTime = end, TimeZone = TimeZoneInfo.Local.Id }
+                    Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
+                    End = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
                 };
 
                 if (!string.IsNullOrEmpty(body))
@@ -193,7 +197,7 @@ public static class CalendarCommands
         return cmd;
     }
 
-    private static Command BuildUpdateEvent(Option<string> formatOption)
+    private static Command BuildUpdateEvent(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var eventIdArg = new Argument<string>("event-id") { Description = "Event ID" };
         var subjectOption = new Option<string?>("--subject") { Description = "New subject" };
@@ -210,6 +214,7 @@ public static class CalendarCommands
             var end = parseResult.GetValue(endOption);
             var body = parseResult.GetValue(bodyOption);
             var categories = parseResult.GetValue(categoriesOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -217,8 +222,8 @@ public static class CalendarCommands
                 var update = new Event();
 
                 if (subject != null) update.Subject = subject;
-                if (start != null) update.Start = new DateTimeTimeZone { DateTime = start, TimeZone = TimeZoneInfo.Local.Id };
-                if (end != null) update.End = new DateTimeTimeZone { DateTime = end, TimeZone = TimeZoneInfo.Local.Id };
+                if (start != null) update.Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz };
+                if (end != null) update.End = new DateTimeTimeZone { DateTime = end, TimeZone = tz };
                 if (body != null) update.Body = new ItemBody { ContentType = BodyType.Text, Content = body };
                 if (categories != null) update.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
@@ -313,7 +318,7 @@ public static class CalendarCommands
         return cmd;
     }
 
-    private static Command BuildFindTimes(Option<string> formatOption)
+    private static Command BuildFindTimes(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var attendeesOption = new Option<string>("--attendees") { Description = "Comma-separated attendee emails", Required = true };
         var durationOption = new Option<int>("--duration") { Description = "Meeting duration in minutes", Required = true };
@@ -327,7 +332,7 @@ public static class CalendarCommands
             var duration = parseResult.GetValue(durationOption);
             var start = parseResult.GetValue(startOption) ?? DateTime.Now.ToString("o");
             var end = parseResult.GetValue(endOption) ?? DateTime.Now.AddDays(7).ToString("o");
-            var tz = TimeZoneInfo.Local.Id;
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -380,7 +385,7 @@ public static class CalendarCommands
         return cmd;
     }
 
-    private static Command BuildSchedule(Option<string> formatOption)
+    private static Command BuildSchedule(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var usersOption = new Option<string>("--users") { Description = "Comma-separated user emails", Required = true };
         var startOption = new Option<string>("--start") { Description = "Start datetime (ISO 8601)", Required = true };
@@ -392,7 +397,7 @@ public static class CalendarCommands
             var users = parseResult.GetValue(usersOption)!;
             var start = parseResult.GetValue(startOption)!;
             var end = parseResult.GetValue(endOption)!;
-            var tz = TimeZoneInfo.Local.Id;
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {

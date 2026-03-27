@@ -9,4 +9,9 @@ public static class GlobalOptions
         Description = "Output format: json or table",
         DefaultValueFactory = _ => "json"
     };
+
+    public static readonly Option<string?> TimeZone = new("--timezone")
+    {
+        Description = "Timezone for datetime input/output (IANA e.g. 'Asia/Karachi' or Windows e.g. 'Pakistan Standard Time'). Defaults to local system timezone."
+    };
 }
