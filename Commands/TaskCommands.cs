@@ -8,14 +8,14 @@ namespace GraphCli.Commands;
 
 public static class TaskCommands
 {
-    public static Command Build(Option<string> formatOption)
+    public static Command Build(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var taskCommand = new Command("task", "Microsoft To Do task operations");
 
         taskCommand.Subcommands.Add(BuildLists(formatOption));
-        taskCommand.Subcommands.Add(BuildList(formatOption));
-        taskCommand.Subcommands.Add(BuildCreate(formatOption));
-        taskCommand.Subcommands.Add(BuildUpdate(formatOption));
+        taskCommand.Subcommands.Add(BuildList(formatOption, timezoneOption));
+        taskCommand.Subcommands.Add(BuildCreate(formatOption, timezoneOption));
+        taskCommand.Subcommands.Add(BuildUpdate(formatOption, timezoneOption));
         taskCommand.Subcommands.Add(BuildDelete(formatOption));
         taskCommand.Subcommands.Add(BuildComplete(formatOption));
 
@@ -51,7 +51,7 @@ public static class TaskCommands
         return cmd;
     }
 
-    private static Command BuildList(Option<string> formatOption)
+    private static Command BuildList(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var listIdArg = new Argument<string>("list-id") { Description = "Task list ID" };
         var statusOption = new Option<string?>("--status") { Description = "Filter by status: notStarted, inProgress, completed" };
@@ -61,6 +61,7 @@ public static class TaskCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             var listId = parseResult.GetValue(listIdArg)!;
             var status = parseResult.GetValue(statusOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
@@ -75,11 +76,11 @@ public static class TaskCommands
                     t.Title,
                     Status = t.Status?.ToString(),
                     Importance = t.Importance?.ToString(),
-                    DueDate = t.DueDateTime?.DateTime,
-                    DueTimeZone = t.DueDateTime?.TimeZone,
-                    t.CreatedDateTime,
-                    t.LastModifiedDateTime,
-                    t.CompletedDateTime
+                    DueDate = TimeZoneService.ConvertToTimeZone(t.DueDateTime?.DateTime, t.DueDateTime?.TimeZone, tz),
+                    DueTimeZone = tz,
+                    CreatedDateTime = TimeZoneService.ConvertToTimeZone(t.CreatedDateTime, tz),
+                    LastModifiedDateTime = TimeZoneService.ConvertToTimeZone(t.LastModifiedDateTime, tz),
+                    CompletedDateTime = TimeZoneService.ConvertToTimeZone(t.CompletedDateTime?.DateTime, t.CompletedDateTime?.TimeZone, tz)
                 }).ToList();
                 OutputService.Print(results, format);
             }
@@ -92,7 +93,7 @@ public static class TaskCommands
         return cmd;
     }
 
-    private static Command BuildCreate(Option<string> formatOption)
+    private static Command BuildCreate(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var listIdArg = new Argument<string>("list-id") { Description = "Task list ID" };
         var titleOption = new Option<string>("--title") { Description = "Task title", Required = true };
@@ -107,6 +108,7 @@ public static class TaskCommands
             var due = parseResult.GetValue(dueOption);
             var importance = parseResult.GetValue(importanceOption);
             var body = parseResult.GetValue(bodyOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -117,7 +119,7 @@ public static class TaskCommands
                 };
 
                 if (!string.IsNullOrEmpty(due))
-                    task.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = TimeZoneInfo.Local.Id };
+                    task.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = tz };
 
                 if (!string.IsNullOrEmpty(importance))
                 {
@@ -144,7 +146,7 @@ public static class TaskCommands
         return cmd;
     }
 
-    private static Command BuildUpdate(Option<string> formatOption)
+    private static Command BuildUpdate(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var listIdArg = new Argument<string>("list-id") { Description = "Task list ID" };
         var taskIdArg = new Argument<string>("task-id") { Description = "Task ID" };
@@ -161,6 +163,7 @@ public static class TaskCommands
             var statusStr = parseResult.GetValue(statusOption);
             var due = parseResult.GetValue(dueOption);
             var importance = parseResult.GetValue(importanceOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
@@ -168,7 +171,7 @@ public static class TaskCommands
                 var update = new TodoTask();
 
                 if (title != null) update.Title = title;
-                if (due != null) update.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = TimeZoneInfo.Local.Id };
+                if (due != null) update.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = tz };
 
                 if (statusStr != null)
                 {

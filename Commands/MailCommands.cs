@@ -10,13 +10,13 @@ namespace GraphCli.Commands;
 
 public static class MailCommands
 {
-    public static Command Build(Option<string> formatOption)
+    public static Command Build(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var mailCommand = new Command("mail", "Email operations");
 
-        mailCommand.Subcommands.Add(BuildList(formatOption));
-        mailCommand.Subcommands.Add(BuildGet(formatOption));
-        mailCommand.Subcommands.Add(BuildSearch(formatOption));
+        mailCommand.Subcommands.Add(BuildList(formatOption, timezoneOption));
+        mailCommand.Subcommands.Add(BuildGet(formatOption, timezoneOption));
+        mailCommand.Subcommands.Add(BuildSearch(formatOption, timezoneOption));
         mailCommand.Subcommands.Add(BuildSend(formatOption));
         mailCommand.Subcommands.Add(BuildDraft(formatOption));
         mailCommand.Subcommands.Add(BuildSendDraft(formatOption));
@@ -28,7 +28,7 @@ public static class MailCommands
         return mailCommand;
     }
 
-    private static Command BuildList(Option<string> formatOption)
+    private static Command BuildList(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var folderOption = new Option<string?>("--folder") { Description = "Mail folder name (default: Inbox)" };
         var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 10, Description = "Number of messages to retrieve" };
@@ -38,6 +38,7 @@ public static class MailCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             var folder = parseResult.GetValue(folderOption);
             var top = parseResult.GetValue(topOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
@@ -67,7 +68,7 @@ public static class MailCommands
                     m.Id,
                     m.Subject,
                     From = m.From?.EmailAddress?.Address,
-                    m.ReceivedDateTime,
+                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(m.ReceivedDateTime, tz),
                     m.IsRead,
                     m.HasAttachments
                 }).ToList();
@@ -82,7 +83,7 @@ public static class MailCommands
         return cmd;
     }
 
-    private static Command BuildGet(Option<string> formatOption)
+    private static Command BuildGet(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
         var cmd = new Command("get", "Get message details") { messageIdArg };
@@ -90,6 +91,7 @@ public static class MailCommands
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             var messageId = parseResult.GetValue(messageIdArg)!;
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
@@ -104,7 +106,7 @@ public static class MailCommands
                     From = msg.From?.EmailAddress?.Address,
                     To = msg.ToRecipients?.Select(r => r.EmailAddress?.Address).ToList(),
                     Cc = msg.CcRecipients?.Select(r => r.EmailAddress?.Address).ToList(),
-                    msg.ReceivedDateTime,
+                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(msg.ReceivedDateTime, tz),
                     BodyType = msg.Body?.ContentType?.ToString(),
                     Body = msg.Body?.Content,
                     msg.IsRead,
@@ -121,7 +123,7 @@ public static class MailCommands
         return cmd;
     }
 
-    private static Command BuildSearch(Option<string> formatOption)
+    private static Command BuildSearch(Option<string> formatOption, Option<string?> timezoneOption)
     {
         var queryOption = new Option<string>("--query") { Description = "Search query", Required = true };
         var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 10, Description = "Number of results" };
@@ -131,6 +133,7 @@ public static class MailCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             var query = parseResult.GetValue(queryOption)!;
             var top = parseResult.GetValue(topOption);
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
@@ -145,7 +148,7 @@ public static class MailCommands
                     m.Id,
                     m.Subject,
                     From = m.From?.EmailAddress?.Address,
-                    m.ReceivedDateTime,
+                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(m.ReceivedDateTime, tz),
                     m.IsRead
                 }).ToList();
                 OutputService.Print(results, format);
