@@ -24,6 +24,8 @@ public static class MailCommands
         mailCommand.Subcommands.Add(BuildDelete(formatOption));
         mailCommand.Subcommands.Add(BuildFolders(formatOption));
         mailCommand.Subcommands.Add(BuildMarkRead(formatOption));
+        mailCommand.Subcommands.Add(BuildAttachments(formatOption));
+        mailCommand.Subcommands.Add(BuildDownloadAttachment());
 
         return mailCommand;
     }
@@ -401,6 +403,77 @@ public static class MailCommands
                     f.UnreadItemCount
                 }).ToList();
                 OutputService.Print(results, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildAttachments(Option<string> formatOption)
+    {
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
+        var cmd = new Command("attachments", "List attachments on a message") { messageIdArg };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var messageId = parseResult.GetValue(messageIdArg)!;
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var attachments = await client.Me.Messages[messageId].Attachments.GetAsync(r =>
+                {
+                    r.QueryParameters.Select = ["id", "name", "contentType", "size", "isInline"];
+                }, ct);
+                var results = attachments?.Value?.Select(a => new
+                {
+                    a.Id,
+                    a.Name,
+                    a.ContentType,
+                    a.Size,
+                    a.IsInline
+                }).ToList();
+                OutputService.Print(results, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildDownloadAttachment()
+    {
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
+        var attachmentIdArg = new Argument<string>("attachment-id") { Description = "Attachment ID" };
+        var outOption = new Option<string?>("--out") { Description = "Output file path (default: attachment name in current directory)" };
+        var cmd = new Command("download-attachment", "Download an attachment to a file") { messageIdArg, attachmentIdArg, outOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var messageId = parseResult.GetValue(messageIdArg)!;
+            var attachmentId = parseResult.GetValue(attachmentIdArg)!;
+            var outPath = parseResult.GetValue(outOption);
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var attachment = await client.Me.Messages[messageId].Attachments[attachmentId].GetAsync(cancellationToken: ct);
+
+                if (attachment is FileAttachment fileAttachment && fileAttachment.ContentBytes != null)
+                {
+                    var filePath = outPath ?? fileAttachment.Name ?? "attachment";
+                    await File.WriteAllBytesAsync(filePath, fileAttachment.ContentBytes, ct);
+                    OutputService.Print(new { status = "downloaded", file = filePath, size = fileAttachment.ContentBytes.Length });
+                }
+                else
+                {
+                    OutputService.PrintError("unsupported", "Only file attachments can be downloaded. Item and reference attachments are not supported.");
+                    Environment.ExitCode = 1;
+                }
             }
             catch (ODataError ex)
             {

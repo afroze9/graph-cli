@@ -17,6 +17,7 @@ public static class CalendarCommands
 
         calendarCommand.Subcommands.Add(BuildList(formatOption));
         calendarCommand.Subcommands.Add(BuildEvents(formatOption, timezoneOption));
+        calendarCommand.Subcommands.Add(BuildGetEvent(formatOption, timezoneOption));
         calendarCommand.Subcommands.Add(BuildCreateEvent(formatOption, timezoneOption));
         calendarCommand.Subcommands.Add(BuildUpdateEvent(formatOption, timezoneOption));
         calendarCommand.Subcommands.Add(BuildDeleteEvent(formatOption));
@@ -123,6 +124,85 @@ public static class CalendarCommands
                     Categories = e.Categories
                 }).ToList();
                 OutputService.Print(results, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildGetEvent(Option<string> formatOption, Option<string?> timezoneOption)
+    {
+        var eventIdArg = new Argument<string>("event-id") { Description = "Event ID" };
+        var cmd = new Command("get-event", "Get full event details including attendees and body") { eventIdArg };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var eventId = parseResult.GetValue(eventIdArg)!;
+            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var e = await client.Me.Events[eventId].GetAsync(r =>
+                {
+                    r.QueryParameters.Select =
+                    [
+                        "id", "subject", "body", "bodyPreview", "start", "end",
+                        "location", "locations", "organizer", "attendees",
+                        "isOnlineMeeting", "onlineMeeting", "onlineMeetingProvider",
+                        "importance", "sensitivity", "isAllDay", "isCancelled",
+                        "responseStatus", "categories", "hasAttachments",
+                        "recurrence", "webLink"
+                    ];
+                    r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
+                }, ct);
+
+                OutputService.Print(new
+                {
+                    e!.Id,
+                    e.Subject,
+                    BodyType = e.Body?.ContentType?.ToString(),
+                    Body = e.Body?.Content,
+                    e.BodyPreview,
+                    StartDateTime = e.Start?.DateTime,
+                    StartTimeZone = e.Start?.TimeZone,
+                    EndDateTime = e.End?.DateTime,
+                    EndTimeZone = e.End?.TimeZone,
+                    Location = e.Location?.DisplayName,
+                    Locations = e.Locations?.Select(l => l.DisplayName).ToList(),
+                    Organizer = e.Organizer?.EmailAddress?.Address,
+                    Attendees = e.Attendees?.Select(a => new
+                    {
+                        Name = a.EmailAddress?.Name,
+                        Email = a.EmailAddress?.Address,
+                        Type = a.Type?.ToString(),
+                        Response = a.Status?.Response?.ToString(),
+                        ResponseTime = a.Status?.Time?.ToString("o")
+                    }).ToList(),
+                    e.IsOnlineMeeting,
+                    JoinUrl = e.OnlineMeeting?.JoinUrl,
+                    OnlineMeetingProvider = e.OnlineMeetingProvider?.ToString(),
+                    Importance = e.Importance?.ToString(),
+                    Sensitivity = e.Sensitivity?.ToString(),
+                    e.IsAllDay,
+                    e.IsCancelled,
+                    Response = e.ResponseStatus?.Response?.ToString(),
+                    e.Categories,
+                    e.HasAttachments,
+                    Recurrence = e.Recurrence != null ? new
+                    {
+                        Pattern = e.Recurrence.Pattern?.Type?.ToString(),
+                        Interval = e.Recurrence.Pattern?.Interval,
+                        DaysOfWeek = e.Recurrence.Pattern?.DaysOfWeek?.Select(d => d.ToString()).ToList(),
+                        RangeType = e.Recurrence.Range?.Type?.ToString(),
+                        RangeStart = e.Recurrence.Range?.StartDate?.ToString(),
+                        RangeEnd = e.Recurrence.Range?.EndDate?.ToString()
+                    } : null,
+                    e.WebLink
+                }, format);
             }
             catch (ODataError ex)
             {

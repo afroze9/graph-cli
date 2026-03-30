@@ -39,6 +39,8 @@ graph-cli mail mark-read <message-id> [--unread]
 graph-cli mail move <message-id> --folder <folder-id-or-name>
 graph-cli mail delete <message-id>
 graph-cli mail folders
+graph-cli mail attachments <message-id>
+graph-cli mail download-attachment <message-id> <attachment-id> [--out <path>]
 ```
 
 ### Calendar
@@ -46,6 +48,7 @@ graph-cli mail folders
 ```bash
 graph-cli calendar list
 graph-cli calendar events [--start <iso-date>] [--end <iso-date>] [--calendar-id <id>] [--top <n>]
+graph-cli calendar get-event <event-id>
 graph-cli calendar create-event --subject <text> --start <iso-datetime> --end <iso-datetime> \
     [--attendees <emails>] [--body <text>] [--content-type text|html] \
     [--categories <names>] [--location <text>] [--online-meeting] [--calendar-id <id>]
