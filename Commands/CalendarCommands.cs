@@ -140,10 +140,13 @@ public static class CalendarCommands
         var endOption = new Option<string>("--end") { Description = "End datetime (ISO 8601)", Required = true };
         var attendeesOption = new Option<string?>("--attendees") { Description = "Comma-separated attendee emails" };
         var bodyOption = new Option<string?>("--body") { Description = "Event body/description" };
+        var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
         var categoriesOption = new Option<string?>("--categories") { Description = "Comma-separated category names" };
+        var locationOption = new Option<string?>("--location") { Description = "Event location (e.g. room name or address)" };
+        var onlineMeetingOption = new Option<bool>("--online-meeting") { Description = "Generate a Teams online meeting link" };
         var calendarIdOption = new Option<string?>("--calendar-id") { Description = "Calendar ID (default: primary)" };
         var cmd = new Command("create-event", "Create a calendar event")
-            { subjectOption, startOption, endOption, attendeesOption, bodyOption, categoriesOption, calendarIdOption };
+            { subjectOption, startOption, endOption, attendeesOption, bodyOption, contentTypeOption, categoriesOption, locationOption, onlineMeetingOption, calendarIdOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var subject = parseResult.GetValue(subjectOption)!;
@@ -151,7 +154,10 @@ public static class CalendarCommands
             var end = parseResult.GetValue(endOption)!;
             var attendees = parseResult.GetValue(attendeesOption);
             var body = parseResult.GetValue(bodyOption);
+            var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
             var categories = parseResult.GetValue(categoriesOption);
+            var location = parseResult.GetValue(locationOption);
+            var onlineMeeting = parseResult.GetValue(onlineMeetingOption);
             var calendarId = parseResult.GetValue(calendarIdOption);
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
@@ -166,7 +172,7 @@ public static class CalendarCommands
                 };
 
                 if (!string.IsNullOrEmpty(body))
-                    newEvent.Body = new ItemBody { ContentType = BodyType.Text, Content = body };
+                    newEvent.Body = new ItemBody { ContentType = contentType == "html" ? BodyType.Html : BodyType.Text, Content = body };
 
                 if (!string.IsNullOrEmpty(attendees))
                 {
@@ -180,13 +186,22 @@ public static class CalendarCommands
                 if (!string.IsNullOrEmpty(categories))
                     newEvent.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
+                if (!string.IsNullOrEmpty(location))
+                    newEvent.Location = new Location { DisplayName = location };
+
+                if (onlineMeeting)
+                {
+                    newEvent.IsOnlineMeeting = true;
+                    newEvent.OnlineMeetingProvider = OnlineMeetingProviderType.TeamsForBusiness;
+                }
+
                 Event? created;
                 if (!string.IsNullOrEmpty(calendarId))
                     created = await client.Me.Calendars[calendarId].Events.PostAsync(newEvent, cancellationToken: ct);
                 else
                     created = await client.Me.Events.PostAsync(newEvent, cancellationToken: ct);
 
-                OutputService.Print(new { status = "created", id = created?.Id, subject, start, end });
+                OutputService.Print(new { status = "created", id = created?.Id, subject, start, end, joinUrl = created?.OnlineMeeting?.JoinUrl });
             }
             catch (ODataError ex)
             {
@@ -204,8 +219,9 @@ public static class CalendarCommands
         var startOption = new Option<string?>("--start") { Description = "New start datetime" };
         var endOption = new Option<string?>("--end") { Description = "New end datetime" };
         var bodyOption = new Option<string?>("--body") { Description = "New body" };
+        var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
         var categoriesOption = new Option<string?>("--categories") { Description = "Comma-separated category names" };
-        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption, categoriesOption };
+        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption, contentTypeOption, categoriesOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var eventId = parseResult.GetValue(eventIdArg)!;
@@ -213,6 +229,7 @@ public static class CalendarCommands
             var start = parseResult.GetValue(startOption);
             var end = parseResult.GetValue(endOption);
             var body = parseResult.GetValue(bodyOption);
+            var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
             var categories = parseResult.GetValue(categoriesOption);
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
@@ -224,7 +241,7 @@ public static class CalendarCommands
                 if (subject != null) update.Subject = subject;
                 if (start != null) update.Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz };
                 if (end != null) update.End = new DateTimeTimeZone { DateTime = end, TimeZone = tz };
-                if (body != null) update.Body = new ItemBody { ContentType = BodyType.Text, Content = body };
+                if (body != null) update.Body = new ItemBody { ContentType = contentType == "html" ? BodyType.Html : BodyType.Text, Content = body };
                 if (categories != null) update.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
                 var updated = await client.Me.Events[eventId].PatchAsync(update, cancellationToken: ct);
