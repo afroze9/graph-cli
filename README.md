@@ -38,7 +38,7 @@ graph-cli mail send-draft <message-id>
 graph-cli mail mark-read <message-id> [--unread]
 graph-cli mail move <message-id> --folder <folder-id-or-name>
 graph-cli mail delete <message-id>
-graph-cli mail folders
+graph-cli mail folders [--parent <folder-id-or-name>]
 graph-cli mail attachments <message-id>
 graph-cli mail download-attachment <message-id> <attachment-id> [--out <path>]
 ```
