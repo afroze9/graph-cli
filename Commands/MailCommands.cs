@@ -384,23 +384,40 @@ public static class MailCommands
 
     private static Command BuildFolders(Option<string> formatOption)
     {
-        var cmd = new Command("folders", "List mail folders");
+        var parentOption = new Option<string?>("--parent") { Description = "Parent folder ID or well-known name to list child folders" };
+        var cmd = new Command("folders", "List mail folders") { parentOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
+            var parentId = parseResult.GetValue(parentOption);
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
-                var folders = await client.Me.MailFolders.GetAsync(r =>
+                MailFolderCollectionResponse? folders;
+
+                if (!string.IsNullOrEmpty(parentId))
                 {
-                    r.QueryParameters.Select = ["id", "displayName", "totalItemCount", "unreadItemCount"];
-                }, ct);
+                    folders = await client.Me.MailFolders[parentId].ChildFolders.GetAsync(r =>
+                    {
+                        r.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount", "childFolderCount"];
+                    }, ct);
+                }
+                else
+                {
+                    folders = await client.Me.MailFolders.GetAsync(r =>
+                    {
+                        r.QueryParameters.Select = ["id", "displayName", "totalItemCount", "unreadItemCount", "childFolderCount"];
+                    }, ct);
+                }
+
                 var results = folders?.Value?.Select(f => new
                 {
                     f.Id,
                     f.DisplayName,
+                    f.ParentFolderId,
                     f.TotalItemCount,
-                    f.UnreadItemCount
+                    f.UnreadItemCount,
+                    f.ChildFolderCount
                 }).ToList();
                 OutputService.Print(results, format);
             }
