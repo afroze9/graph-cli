@@ -90,7 +90,7 @@ public static class CalendarCommands
                         r.QueryParameters.StartDateTime = start;
                         r.QueryParameters.EndDateTime = end;
                         r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
+                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories", "type", "seriesMasterId"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
                         r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
                     }, ct);
@@ -102,7 +102,7 @@ public static class CalendarCommands
                         r.QueryParameters.StartDateTime = start;
                         r.QueryParameters.EndDateTime = end;
                         r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories"];
+                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories", "type", "seriesMasterId"];
                         r.QueryParameters.Orderby = ["start/dateTime"];
                         r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
                     }, ct);
@@ -121,7 +121,9 @@ public static class CalendarCommands
                     e.IsAllDay,
                     e.IsCancelled,
                     Response = e.ResponseStatus?.Response?.ToString(),
-                    Categories = e.Categories
+                    Categories = e.Categories,
+                    Type = e.Type?.ToString(),
+                    e.SeriesMasterId
                 }).ToList();
                 OutputService.Print(results, format);
             }
@@ -155,7 +157,7 @@ public static class CalendarCommands
                         "isOnlineMeeting", "onlineMeeting", "onlineMeetingProvider",
                         "importance", "sensitivity", "isAllDay", "isCancelled",
                         "responseStatus", "categories", "hasAttachments",
-                        "recurrence", "webLink"
+                        "recurrence", "type", "seriesMasterId", "webLink"
                     ];
                     r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
                 }, ct);
@@ -192,6 +194,8 @@ public static class CalendarCommands
                     Response = e.ResponseStatus?.Response?.ToString(),
                     e.Categories,
                     e.HasAttachments,
+                    Type = e.Type?.ToString(),
+                    e.SeriesMasterId,
                     Recurrence = e.Recurrence != null ? new
                     {
                         Pattern = e.Recurrence.Pattern?.Type?.ToString(),
@@ -301,7 +305,8 @@ public static class CalendarCommands
         var bodyOption = new Option<string?>("--body") { Description = "New body" };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
         var categoriesOption = new Option<string?>("--categories") { Description = "Comma-separated category names" };
-        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption, contentTypeOption, categoriesOption };
+        var seriesOption = new Option<bool>("--series") { Description = "Apply update to the entire series (resolves series master automatically)" };
+        var cmd = new Command("update-event", "Update a calendar event") { eventIdArg, subjectOption, startOption, endOption, bodyOption, contentTypeOption, categoriesOption, seriesOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var eventId = parseResult.GetValue(eventIdArg)!;
@@ -311,11 +316,33 @@ public static class CalendarCommands
             var body = parseResult.GetValue(bodyOption);
             var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
             var categories = parseResult.GetValue(categoriesOption);
+            var series = parseResult.GetValue(seriesOption);
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
 
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
+
+                if (series)
+                {
+                    var existing = await client.Me.Events[eventId].GetAsync(r =>
+                    {
+                        r.QueryParameters.Select = ["type", "seriesMasterId"];
+                    }, ct);
+
+                    var eventType = existing?.Type?.ToString();
+                    if (eventType == "Occurrence" || eventType == "Exception")
+                    {
+                        eventId = existing!.SeriesMasterId!;
+                    }
+                    else if (eventType != "SeriesMaster")
+                    {
+                        OutputService.PrintError("not_recurring", "Event is not part of a recurring series");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+                }
+
                 var update = new Event();
 
                 if (subject != null) update.Subject = subject;
@@ -325,7 +352,7 @@ public static class CalendarCommands
                 if (categories != null) update.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
 
                 var updated = await client.Me.Events[eventId].PatchAsync(update, cancellationToken: ct);
-                OutputService.Print(new { status = "updated", id = updated?.Id });
+                OutputService.Print(new { status = "updated", id = updated?.Id, series });
             }
             catch (ODataError ex)
             {
