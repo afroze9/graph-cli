@@ -14,5 +14,6 @@ rootCommand.Subcommands.Add(ChatCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(PresenceCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(TaskCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
 rootCommand.Subcommands.Add(ContactCommands.Build(GlobalOptions.Format));
+rootCommand.Subcommands.Add(FilesCommands.Build(GlobalOptions.Format));
 
 return await rootCommand.Parse(args).InvokeAsync();

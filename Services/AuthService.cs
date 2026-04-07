@@ -17,7 +17,8 @@ public class AuthService
         "Calendars.Read.Shared", "Calendars.ReadWrite",
         "Chat.Create", "Chat.ReadWrite", "ChatMessage.Read", "ChatMessage.Send",
         "Presence.Read.All",
-        "Tasks.ReadWrite"
+        "Tasks.ReadWrite",
+        "Files.Read.All", "Sites.Read.All"
     ];
 
     private IPublicClientApplication? _pca;
@@ -125,7 +126,12 @@ public class AuthService
         {
             var json = File.ReadAllText(ConfigPath);
             var config = JsonSerializer.Deserialize<GraphCliConfig>(json);
-            if (config != null) return config;
+            if (config != null)
+            {
+                // Always use DefaultScopes so new permissions are picked up on upgrade
+                config.Scopes = DefaultScopes;
+                return config;
+            }
         }
 
         var envTenant = Environment.GetEnvironmentVariable("GRAPH_CLI_TENANT_ID");
