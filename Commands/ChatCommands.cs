@@ -328,17 +328,60 @@ public static class ChatCommands
         return cmd;
     }
 
+    private static List<ChatMessageMention> ParseMentions(string mentionsValue)
+    {
+        var mentions = new List<ChatMessageMention>();
+        foreach (var pair in mentionsValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = pair.Split(':', 2);
+            if (parts.Length != 2) continue;
+            mentions.Add(new ChatMessageMention
+            {
+                Id = int.Parse(parts[0]),
+                MentionText = parts[1],
+                Mentioned = new ChatMessageMentionedIdentitySet
+                {
+                    User = new Identity { AdditionalData = new Dictionary<string, object>
+                    {
+                        ["userIdentityType"] = "aadUser"
+                    }, DisplayName = parts[1], Id = null }
+                }
+            });
+        }
+        return mentions;
+    }
+
+    private static async Task ResolveMentionUserIds(GraphServiceClient client, List<ChatMessageMention> mentions, CancellationToken ct)
+    {
+        foreach (var mention in mentions)
+        {
+            try
+            {
+                var user = await client.Users[mention.MentionText].GetAsync(cancellationToken: ct);
+                if (user != null)
+                {
+                    mention.Mentioned!.User!.Id = user.Id;
+                    mention.Mentioned.User.DisplayName = user.DisplayName;
+                    mention.MentionText = user.DisplayName;
+                }
+            }
+            catch { /* leave as-is if user lookup fails */ }
+        }
+    }
+
     private static Command BuildSend(Option<string> formatOption)
     {
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageOption = new Option<string>("--message") { Description = "Message text", Required = true };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Content type: text or html" };
-        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption };
+        var mentionsOption = new Option<string>("--mentions") { Description = "Comma-separated id:email pairs for @mentions, e.g. \"0:user@example.com,1:other@example.com\"" };
+        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
             var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
+            var mentionsValue = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -358,6 +401,14 @@ public static class ChatCommands
                         Content = message
                     }
                 };
+
+                if (!string.IsNullOrEmpty(mentionsValue))
+                {
+                    var mentions = ParseMentions(mentionsValue);
+                    await ResolveMentionUserIds(client, mentions, ct);
+                    chatMessage.Mentions = mentions;
+                }
+
                 var sent = await client.Me.Chats[chatId].Messages.PostAsync(chatMessage, cancellationToken: ct);
                 ChatCacheService.Upsert(chatId, null, null);
                 OutputService.Print(new { status = "sent", id = sent?.Id, chatId });
@@ -376,12 +427,14 @@ public static class ChatCommands
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to reply to" };
         var messageOption = new Option<string>("--message") { Description = "Reply text", Required = true };
-        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption };
+        var mentionsOption = new Option<string>("--mentions") { Description = "Comma-separated id:email pairs for @mentions, e.g. \"0:user@example.com,1:other@example.com\"" };
+        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var messageId = parseResult.GetValue(messageIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
+            var mentionsValue = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -401,6 +454,14 @@ public static class ChatCommands
                         Content = message
                     }
                 };
+
+                if (!string.IsNullOrEmpty(mentionsValue))
+                {
+                    var mentions = ParseMentions(mentionsValue);
+                    await ResolveMentionUserIds(client, mentions, ct);
+                    reply.Mentions = mentions;
+                }
+
                 var sent = await client.Me.Chats[chatId].Messages[messageId].Replies.PostAsync(reply, cancellationToken: ct);
                 ChatCacheService.Upsert(chatId, null, null);
                 OutputService.Print(new { status = "replied", id = sent?.Id, chatId, messageId });

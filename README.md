@@ -68,8 +68,8 @@ graph-cli chat get <chat-id>
 graph-cli chat create --members <emails> [--topic <text>] [--type oneOnOne|group]
 graph-cli chat members <chat-id>
 graph-cli chat messages <chat-id> [--top <n>]
-graph-cli chat send <chat-id> --message <text> [--content-type text|html]
-graph-cli chat reply <chat-id> <message-id> --message <text>
+graph-cli chat send <chat-id> --message <text> [--content-type text|html] [--mentions <id:email,...>]
+graph-cli chat reply <chat-id> <message-id> --message <text> [--mentions <id:email,...>]
 ```
 
 ### Presence
