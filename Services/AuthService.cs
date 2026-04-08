@@ -113,7 +113,15 @@ public class AuthService
     {
         Directory.CreateDirectory(ConfigDir);
         var storageProperties = new StorageCreationPropertiesBuilder("token-cache.bin", ConfigDir)
-            .WithUnprotectedFile()
+            .WithLinuxKeyring(
+                schemaName: "com.graphcli.tokencache",
+                collection: "default",
+                secretLabel: "graph-cli MSAL token cache",
+                attribute1: new KeyValuePair<string, string>("Version", "1"),
+                attribute2: new KeyValuePair<string, string>("ProductGroup", "graph-cli"))
+            .WithMacKeyChain(
+                serviceName: "graph-cli",
+                accountName: "graph-cli-msal-cache")
             .Build();
 
         var cacheHelper = await MsalCacheHelper.CreateAsync(storageProperties);

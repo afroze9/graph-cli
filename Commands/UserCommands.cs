@@ -86,7 +86,8 @@ public static class UserCommands
                 var client = await GraphClientProvider.CreateAsync();
                 var users = await client.Users.GetAsync(r =>
                 {
-                    r.QueryParameters.Filter = $"startsWith(displayName,'{query}') or startsWith(mail,'{query}')";
+                    var escaped = query.Replace("'", "''");
+                    r.QueryParameters.Filter = $"startsWith(displayName,'{escaped}') or startsWith(mail,'{escaped}')";
                     r.QueryParameters.Select = ["id", "displayName", "mail", "userPrincipalName", "jobTitle"];
                     r.QueryParameters.Top = 25;
                 }, ct);

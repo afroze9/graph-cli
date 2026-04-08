@@ -141,7 +141,7 @@ public static class MailCommands
                 var client = await GraphClientProvider.CreateAsync();
                 var messages = await client.Me.Messages.GetAsync(r =>
                 {
-                    r.QueryParameters.Search = $"\"{query}\"";
+                    r.QueryParameters.Search = $"\"{query.Replace("\"", "\\\"")}\"";
                     r.QueryParameters.Top = top;
                     r.QueryParameters.Select = ["id", "subject", "from", "receivedDateTime", "isRead"];
                 }, ct);
@@ -482,9 +482,9 @@ public static class MailCommands
 
                 if (attachment is FileAttachment fileAttachment && fileAttachment.ContentBytes != null)
                 {
-                    var filePath = outPath ?? fileAttachment.Name ?? "attachment";
-                    await File.WriteAllBytesAsync(filePath, fileAttachment.ContentBytes, ct);
-                    OutputService.Print(new { status = "downloaded", file = filePath, size = fileAttachment.ContentBytes.Length });
+                    var fileName = outPath ?? Path.GetFileName(fileAttachment.Name) ?? "attachment";
+                    await File.WriteAllBytesAsync(fileName, fileAttachment.ContentBytes, ct);
+                    OutputService.Print(new { status = "downloaded", file = fileName, size = fileAttachment.ContentBytes.Length });
                 }
                 else
                 {

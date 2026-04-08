@@ -176,7 +176,7 @@ public static class FilesCommands
                         ?? throw new InvalidOperationException("Could not determine drive ID from sharing URL.");
                     resolvedItemId = sharedItem.Id!;
 
-                    var filePath = outPath ?? sharedItem.Name ?? "download";
+                    var filePath = outPath ?? Path.GetFileName(sharedItem.Name) ?? "download";
                     var content = await client.Drives[resolvedDrive].Items[resolvedItemId].Content.GetAsync(cancellationToken: ct);
                     await WriteStreamToFileAsync(content, filePath, sharedItem.Size, ct);
                 }
@@ -205,7 +205,7 @@ public static class FilesCommands
                         return;
                     }
 
-                    var filePath = outPath ?? driveItem.Name ?? "download";
+                    var filePath = outPath ?? Path.GetFileName(driveItem.Name) ?? "download";
                     var content = await client.Drives[resolvedDrive].Items[resolvedItemId].Content.GetAsync(cancellationToken: ct);
                     await WriteStreamToFileAsync(content, filePath, driveItem.Size, ct);
                 }
