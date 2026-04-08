@@ -1,0 +1,115 @@
+using System.CommandLine;
+using GraphCli.Services;
+using Microsoft.Graph.Models.ODataErrors;
+
+namespace GraphCli.Commands;
+
+public static class ListsCommands
+{
+    public static Command Build(Option<string> formatOption)
+    {
+        var listsCommand = new Command("lists", "SharePoint list operations");
+
+        listsCommand.Subcommands.Add(BuildList(formatOption));
+        listsCommand.Subcommands.Add(BuildItems(formatOption));
+
+        return listsCommand;
+    }
+
+    private static Command BuildList(Option<string> formatOption)
+    {
+        var siteOption = new Option<string>("--site") { Description = "SharePoint site (name, ID, or hostname path)", Required = true };
+        var cmd = new Command("list", "List all lists on a SharePoint site") { siteOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var site = parseResult.GetValue(siteOption)!;
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var siteId = await PagesCommands.ResolveSiteIdAsync(client, site, ct);
+
+                var lists = await client.Sites[siteId].Lists.GetAsync(r =>
+                {
+                    r.QueryParameters.Select = ["id", "name", "displayName", "description", "webUrl",
+                        "createdDateTime", "lastModifiedDateTime", "list"];
+                }, ct);
+
+                var results = lists?.Value?.Select(l => new
+                {
+                    l.Id,
+                    l.Name,
+                    l.DisplayName,
+                    l.Description,
+                    Template = l.ListProp?.Template?.ToString(),
+                    Hidden = l.ListProp?.Hidden,
+                    l.WebUrl,
+                    l.CreatedDateTime,
+                    l.LastModifiedDateTime
+                }).ToList();
+                OutputService.Print(results, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildItems(Option<string> formatOption)
+    {
+        var listArg = new Argument<string>("list-id") { Description = "List ID or name" };
+        var siteOption = new Option<string>("--site") { Description = "SharePoint site (name, ID, or hostname path)", Required = true };
+        var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 50, Description = "Number of items to retrieve" };
+        var fieldsOption = new Option<string?>("--fields") { Description = "Comma-separated field names to select (e.g. Title,Status,Priority)" };
+        var filterOption = new Option<string?>("--filter") { Description = "OData filter expression (e.g. \"fields/Status eq 'Active'\")" };
+        var cmd = new Command("items", "List items in a SharePoint list") { listArg, siteOption, topOption, fieldsOption, filterOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var listId = parseResult.GetValue(listArg)!;
+            var site = parseResult.GetValue(siteOption)!;
+            var top = parseResult.GetValue(topOption);
+            var fields = parseResult.GetValue(fieldsOption);
+            var filter = parseResult.GetValue(filterOption);
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+                var siteId = await PagesCommands.ResolveSiteIdAsync(client, site, ct);
+
+                var items = await client.Sites[siteId].Lists[listId].Items.GetAsync(r =>
+                {
+                    r.QueryParameters.Top = top;
+
+                    if (!string.IsNullOrEmpty(fields))
+                        r.QueryParameters.Expand = [$"fields(select={fields})"];
+                    else
+                        r.QueryParameters.Expand = ["fields"];
+
+                    if (!string.IsNullOrEmpty(filter))
+                        r.QueryParameters.Filter = filter;
+                }, ct);
+
+                var results = items?.Value?.Select(i => new
+                {
+                    i.Id,
+                    i.WebUrl,
+                    i.CreatedDateTime,
+                    i.LastModifiedDateTime,
+                    CreatedBy = i.CreatedBy?.User?.DisplayName,
+                    LastModifiedBy = i.LastModifiedBy?.User?.DisplayName,
+                    Fields = i.Fields?.AdditionalData
+                }).ToList();
+                OutputService.Print(results, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+}
