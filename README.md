@@ -7,21 +7,74 @@ A .NET global tool for interacting with Microsoft Graph — manage emails, calen
 Requires [.NET 10 SDK](https://dotnet.microsoft.com/download) or later.
 
 ```bash
-# Clone and install
+# Install from NuGet
+dotnet tool install -g graph-cli
+```
+
+Or install from source:
+
+```bash
 git clone https://github.com/afroze9/graph-cli.git
 cd graph-cli
 dotnet pack -o ./nupkg
 dotnet tool install -g graph-cli --add-source ./nupkg
 ```
 
-## Authentication
+## Setup (First-Time Users)
 
-Uses device-code flow with Microsoft Identity. Tokens are cached at `~/.graph-cli/token-cache.bin` and auto-refresh silently.
+### 1. Register an Azure AD App
+
+1. Go to [Azure Portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade) and click **New registration**
+2. Name it something like `graph-cli`, set **Supported account types** to "Single tenant", and set **Redirect URI** to `http://localhost` (type: Public client/native)
+3. After creation, copy the **Application (client) ID** and **Directory (tenant) ID** from the Overview page
+4. Go to **API permissions → Add a permission → Microsoft Graph → Delegated permissions** and add:
+   - `User.Read`, `User.ReadBasic.All`
+   - `Mail.ReadWrite`, `Mail.Send`
+   - `Calendars.Read.Shared`, `Calendars.ReadWrite`
+   - `Chat.Create`, `Chat.ReadWrite`, `ChatMessage.Read`, `ChatMessage.Send`
+   - `Presence.Read.All`
+   - `Tasks.ReadWrite`
+   - `Files.Read.All`, `Sites.Read.All`
+5. Click **Grant admin consent** (or ask your tenant admin to do this)
+
+### 2. Configure graph-cli
+
+Create `~/.graph-cli/config.json`:
+
+```json
+{
+  "tenantId": "<your-tenant-id>",
+  "clientId": "<your-client-id>"
+}
+```
+
+Or set environment variables `GRAPH_CLI_TENANT_ID` and `GRAPH_CLI_CLIENT_ID` instead.
+
+### 3. Authenticate
 
 ```bash
-graph-cli auth login    # Interactive browser auth (only needed once)
+graph-cli auth login    # Opens browser for interactive auth (only needed once)
 graph-cli auth status   # Check if authenticated
 graph-cli auth logout   # Clear cached tokens
+```
+
+Tokens are cached at `~/.graph-cli/token-cache.bin` and auto-refresh silently — you won't need to log in again unless you explicitly log out.
+
+## Quick Start
+
+```bash
+# Check your profile
+graph-cli user me --format table
+
+# See latest emails
+graph-cli mail list --top 5 --format table
+
+# Check today's calendar
+graph-cli calendar events --format table
+
+# Allow a contact before sending
+graph-cli contacts allow jane@company.com --actions email,chat
+graph-cli mail send --to jane@company.com --subject "Hello" --body "Hi Jane"
 ```
 
 ## Commands

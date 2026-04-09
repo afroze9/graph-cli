@@ -342,7 +342,7 @@ public static class FilesCommands
                     Recipients = inviteRecipients,
                     Roles = [role],
                     RequireSignIn = true,
-                    SendInvitation = true,
+                    SendInvitation = false,
                     Message = message
                 };
 
