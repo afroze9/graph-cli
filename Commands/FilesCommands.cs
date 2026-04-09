@@ -59,6 +59,13 @@ public static class FilesCommands
                     MimeType = i.File?.MimeType,
                     i.WebUrl
                 }).ToList();
+
+                if (results != null)
+                {
+                    FileCacheService.UpsertMany(results.Select(r =>
+                        (r.Id!, r.Name!, r.Type, r.Size, r.MimeType, r.WebUrl)));
+                }
+
                 OutputService.Print(results, format);
             }
             catch (ODataError ex)
@@ -226,7 +233,8 @@ public static class FilesCommands
         var driveIdOption = new Option<string?>("--drive-id") { Description = "Drive ID (default: current user's OneDrive)" };
         var siteOption = new Option<string?>("--site") { Description = "SharePoint site ID or hostname" };
         var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 25, Description = "Number of results to retrieve" };
-        var cmd = new Command("search", "Search for files across OneDrive or SharePoint") { queryArg, driveIdOption, siteOption, topOption };
+        var refreshOption = new Option<bool>("--refresh") { DefaultValueFactory = _ => false, Description = "Bypass cache and search via API" };
+        var cmd = new Command("search", "Search for files across OneDrive or SharePoint") { queryArg, driveIdOption, siteOption, topOption, refreshOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
@@ -234,6 +242,28 @@ public static class FilesCommands
             var driveId = parseResult.GetValue(driveIdOption);
             var site = parseResult.GetValue(siteOption);
             var top = parseResult.GetValue(topOption);
+            var refresh = parseResult.GetValue(refreshOption);
+
+            // Check cache first (only when no site/drive filters and not refreshing)
+            if (!refresh && string.IsNullOrEmpty(site) && string.IsNullOrEmpty(driveId))
+            {
+                var cached = FileCacheService.Search(query, top);
+                if (cached.Count > 0)
+                {
+                    var cachedResults = cached.Select(f => new
+                    {
+                        f.Id,
+                        f.Name,
+                        f.Type,
+                        f.Size,
+                        f.MimeType,
+                        f.WebUrl
+                    }).ToList();
+                    OutputService.Print(cachedResults, format);
+                    return;
+                }
+            }
+
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
@@ -256,6 +286,13 @@ public static class FilesCommands
                     Path = i.ParentReference?.Path,
                     i.WebUrl
                 }).ToList();
+
+                if (items != null)
+                {
+                    FileCacheService.UpsertMany(items.Select(i =>
+                        (i.Id!, i.Name!, i.Type, i.Size, i.MimeType, i.WebUrl)));
+                }
+
                 OutputService.Print(items, format);
             }
             catch (ODataError ex)

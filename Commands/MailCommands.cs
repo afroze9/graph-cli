@@ -306,22 +306,34 @@ public static class MailCommands
 
     private static Command BuildMove(Option<string> formatOption)
     {
-        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
+        var messageIdsArg = new Argument<string[]>("message-id") { Description = "One or more message IDs", Arity = ArgumentArity.OneOrMore };
         var folderOption = new Option<string>("--folder") { Description = "Destination folder ID or well-known name", Required = true };
-        var cmd = new Command("move", "Move message to folder") { messageIdArg, folderOption };
+        var cmd = new Command("move", "Move one or more messages to a folder") { messageIdsArg, folderOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageId = parseResult.GetValue(messageIdArg)!;
+            var messageIds = parseResult.GetValue(messageIdsArg)!;
             var folder = parseResult.GetValue(folderOption)!;
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
-                var moved = await client.Me.Messages[messageId].Move.PostAsync(
-                    new Microsoft.Graph.Me.Messages.Item.Move.MovePostRequestBody
+                var results = new List<object>();
+                foreach (var messageId in messageIds)
+                {
+                    try
                     {
-                        DestinationId = folder
-                    }, cancellationToken: ct);
-                OutputService.Print(new { status = "moved", messageId = moved?.Id, folder });
+                        var moved = await client.Me.Messages[messageId].Move.PostAsync(
+                            new Microsoft.Graph.Me.Messages.Item.Move.MovePostRequestBody
+                            {
+                                DestinationId = folder
+                            }, cancellationToken: ct);
+                        results.Add(new { status = "moved", messageId = moved?.Id, folder });
+                    }
+                    catch (ODataError ex)
+                    {
+                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
+                    }
+                }
+                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
             }
             catch (ODataError ex)
             {
@@ -334,16 +346,28 @@ public static class MailCommands
 
     private static Command BuildDelete(Option<string> formatOption)
     {
-        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
-        var cmd = new Command("delete", "Delete a message") { messageIdArg };
+        var messageIdsArg = new Argument<string[]>("message-id") { Description = "One or more message IDs", Arity = ArgumentArity.OneOrMore };
+        var cmd = new Command("delete", "Delete one or more messages") { messageIdsArg };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageId = parseResult.GetValue(messageIdArg)!;
+            var messageIds = parseResult.GetValue(messageIdsArg)!;
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
-                await client.Me.Messages[messageId].DeleteAsync(cancellationToken: ct);
-                OutputService.Print(new { status = "deleted", messageId });
+                var results = new List<object>();
+                foreach (var messageId in messageIds)
+                {
+                    try
+                    {
+                        await client.Me.Messages[messageId].DeleteAsync(cancellationToken: ct);
+                        results.Add(new { status = "deleted", messageId });
+                    }
+                    catch (ODataError ex)
+                    {
+                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
+                    }
+                }
+                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
             }
             catch (ODataError ex)
             {
@@ -356,22 +380,34 @@ public static class MailCommands
 
     private static Command BuildMarkRead(Option<string> formatOption)
     {
-        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID" };
+        var messageIdsArg = new Argument<string[]>("message-id") { Description = "One or more message IDs", Arity = ArgumentArity.OneOrMore };
         var unreadOption = new Option<bool>("--unread") { Description = "Mark as unread instead of read" };
-        var cmd = new Command("mark-read", "Mark a message as read or unread") { messageIdArg, unreadOption };
+        var cmd = new Command("mark-read", "Mark one or more messages as read or unread") { messageIdsArg, unreadOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageId = parseResult.GetValue(messageIdArg)!;
+            var messageIds = parseResult.GetValue(messageIdsArg)!;
             var unread = parseResult.GetValue(unreadOption);
             var isRead = !unread;
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
-                await client.Me.Messages[messageId].PatchAsync(new Message
+                var results = new List<object>();
+                foreach (var messageId in messageIds)
                 {
-                    IsRead = isRead
-                }, cancellationToken: ct);
-                OutputService.Print(new { status = isRead ? "marked_read" : "marked_unread", messageId });
+                    try
+                    {
+                        await client.Me.Messages[messageId].PatchAsync(new Message
+                        {
+                            IsRead = isRead
+                        }, cancellationToken: ct);
+                        results.Add(new { status = isRead ? "marked_read" : "marked_unread", messageId });
+                    }
+                    catch (ODataError ex)
+                    {
+                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
+                    }
+                }
+                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
             }
             catch (ODataError ex)
             {

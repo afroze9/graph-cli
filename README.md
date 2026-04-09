@@ -88,9 +88,9 @@ graph-cli mail search --query <text> [--top <n>]
 graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html]
 graph-cli mail draft --to <emails> --subject <text> --body <text>
 graph-cli mail send-draft <message-id>
-graph-cli mail mark-read <message-id> [--unread]
-graph-cli mail move <message-id> --folder <folder-id-or-name>
-graph-cli mail delete <message-id>
+graph-cli mail mark-read <message-id> [<id2> ...] [--unread]
+graph-cli mail move <message-id> [<id2> ...] --folder <folder-id-or-name>
+graph-cli mail delete <message-id> [<id2> ...]
 graph-cli mail folders [--parent <folder-id-or-name>]
 graph-cli mail attachments <message-id>
 graph-cli mail download-attachment <message-id> <attachment-id> [--out <path>]
