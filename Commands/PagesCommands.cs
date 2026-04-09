@@ -21,35 +21,71 @@ public static class PagesCommands
     private static Command BuildList(Option<string> formatOption)
     {
         var siteOption = new Option<string>("--site") { Description = "SharePoint site ID or hostname (e.g. contoso.sharepoint.com:/sites/team)", Required = true };
-        var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 25, Description = "Number of pages to retrieve" };
-        var cmd = new Command("list", "List pages on a SharePoint site") { siteOption, topOption };
+        var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 25, Description = "Number of results to return" };
+        var searchOption = new Option<string?>("--search") { Description = "Search pages by name or title (client-side, fetches all pages)" };
+        var cmd = new Command("list", "List pages on a SharePoint site") { siteOption, topOption, searchOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             var site = parseResult.GetValue(siteOption)!;
             var top = parseResult.GetValue(topOption);
+            var search = parseResult.GetValue(searchOption);
             try
             {
                 var client = await GraphClientProvider.CreateAsync();
                 var siteId = await ResolveSiteIdAsync(client, site, ct);
 
-                var pages = await client.Sites[siteId].Pages.GraphSitePage
-                    .GetAsync(r =>
-                    {
-                        r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "name", "title", "webUrl", "pageLayout",
-                            "createdDateTime", "lastModifiedDateTime", "createdBy", "lastModifiedBy",
-                            "publishingState"];
-                        r.QueryParameters.Orderby = ["lastModifiedDateTime desc"];
-                    }, ct);
+                List<BaseSitePage> items;
 
-                var results = pages?.Value?.Select(p => new
+                if (!string.IsNullOrEmpty(search))
+                {
+                    // Paginate through all pages, filter client-side
+                    items = [];
+                    var response = await client.Sites[siteId].Pages
+                        .GetAsync(r =>
+                        {
+                            r.QueryParameters.Top = 100;
+                            r.QueryParameters.Select = ["id", "name", "title", "webUrl",
+                                "createdDateTime", "lastModifiedDateTime", "createdBy", "lastModifiedBy"];
+                        }, ct);
+
+                    while (response?.Value != null)
+                    {
+                        items.AddRange(response.Value.Where(p =>
+                            (p.Name?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                            ((p as SitePage)?.Title?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)));
+
+                        if (items.Count >= top || string.IsNullOrEmpty(response.OdataNextLink))
+                            break;
+
+                        response = await client.Sites[siteId].Pages
+                            .WithUrl(response.OdataNextLink)
+                            .GetAsync(cancellationToken: ct);
+                    }
+
+                    items = items.Take(top).ToList();
+                }
+                else
+                {
+                    var response = await client.Sites[siteId].Pages
+                        .GetAsync(r =>
+                        {
+                            r.QueryParameters.Top = top;
+                            r.QueryParameters.Select = ["id", "name", "title", "webUrl",
+                                "createdDateTime", "lastModifiedDateTime", "createdBy", "lastModifiedBy"];
+                            r.QueryParameters.Orderby = ["lastModifiedDateTime desc"];
+                        }, ct);
+
+                    items = response?.Value ?? [];
+                }
+
+                var results = items.Select(p => new
                 {
                     p.Id,
-                    p.Title,
+                    Title = (p as SitePage)?.Title ?? p.Name,
                     p.Name,
-                    PageLayout = p.PageLayout?.ToString(),
-                    PublishingState = p.PublishingState?.Level?.ToString(),
+                    PageLayout = (p as SitePage)?.PageLayout?.ToString(),
+                    PublishingState = (p as SitePage)?.PublishingState?.Level?.ToString(),
                     p.WebUrl,
                     p.CreatedDateTime,
                     p.LastModifiedDateTime,
@@ -84,77 +120,104 @@ public static class PagesCommands
                 var client = await GraphClientProvider.CreateAsync();
                 var siteId = await ResolveSiteIdAsync(client, site, ct);
 
-                var page = await client.Sites[siteId].Pages[pageId].GraphSitePage
-                    .GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "name", "title", "webUrl", "pageLayout", "promotionKind",
-                            "createdDateTime", "lastModifiedDateTime", "createdBy", "lastModifiedBy",
-                            "publishingState", "titleArea", "description", "thumbnailWebUrl",
-                            "showComments", "showRecommendedPages"];
-                        if (expandContent)
-                        {
-                            r.QueryParameters.Expand = ["canvasLayout"];
-                        }
-                    }, ct);
-
-                if (page == null)
+                // Try sitePage cast first for rich properties + canvas, fall back to base
+                SitePage? page = null;
+                try
                 {
-                    OutputService.PrintError("not_found", "Page not found.");
-                    Environment.ExitCode = 1;
-                    return;
-                }
-
-                object? canvasLayout = null;
-                if (expandContent && page.CanvasLayout != null)
-                {
-                    canvasLayout = page.CanvasLayout.HorizontalSections?.Select(s => new
-                    {
-                        s.Id,
-                        Layout = s.Layout?.ToString(),
-                        Columns = s.Columns?.Select(c => new
+                    page = await client.Sites[siteId].Pages[pageId].GraphSitePage
+                        .GetAsync(r =>
                         {
-                            c.Id,
-                            c.Width,
-                            Webparts = c.Webparts?.Select(wp => new
+                            r.QueryParameters.Select = ["id", "name", "title", "webUrl", "pageLayout", "promotionKind",
+                                "createdDateTime", "lastModifiedDateTime", "createdBy", "lastModifiedBy",
+                                "publishingState", "titleArea", "description", "thumbnailWebUrl",
+                                "showComments", "showRecommendedPages"];
+                            if (expandContent)
                             {
-                                ODataType = wp.OdataType,
-                                Id = wp.Id,
-                                InnerHtml = (wp as TextWebPart)?.InnerHtml,
-                                WebPartType = (wp as StandardWebPart)?.WebPartType,
-                            }).ToList()
-                        }).ToList()
-                    }).ToList();
+                                r.QueryParameters.Expand = ["canvasLayout"];
+                            }
+                        }, ct);
                 }
+                catch (ODataError) { /* page may not support sitePage cast */ }
 
-                OutputService.Print(new
+                if (page != null)
                 {
-                    page.Id,
-                    page.Title,
-                    page.Name,
-                    page.Description,
-                    PageLayout = page.PageLayout?.ToString(),
-                    PromotionKind = page.PromotionKind?.ToString(),
-                    PublishingState = page.PublishingState?.Level?.ToString(),
-                    PublishingVersion = page.PublishingState?.VersionId,
-                    page.ShowComments,
-                    page.ShowRecommendedPages,
-                    page.WebUrl,
-                    page.ThumbnailWebUrl,
-                    page.CreatedDateTime,
-                    page.LastModifiedDateTime,
-                    CreatedBy = page.CreatedBy?.User?.DisplayName,
-                    LastModifiedBy = page.LastModifiedBy?.User?.DisplayName,
-                    TitleArea = page.TitleArea != null ? new
+                    object? canvasLayout = null;
+                    if (expandContent && page.CanvasLayout != null)
                     {
-                        Layout = page.TitleArea.Layout?.ToString(),
-                        TextAlignment = page.TitleArea.TextAlignment?.ToString(),
-                        ShowAuthor = page.TitleArea.ShowAuthor,
-                        ShowPublishedDate = page.TitleArea.ShowPublishedDate,
-                        page.TitleArea.ImageWebUrl,
-                        page.TitleArea.EnableGradientEffect
-                    } : null,
-                    CanvasLayout = canvasLayout
-                }, format);
+                        canvasLayout = page.CanvasLayout.HorizontalSections?.Select(s => new
+                        {
+                            s.Id,
+                            Layout = s.Layout?.ToString(),
+                            Columns = s.Columns?.Select(c => new
+                            {
+                                c.Id,
+                                c.Width,
+                                Webparts = c.Webparts?.Select(wp => new
+                                {
+                                    ODataType = wp.OdataType,
+                                    Id = wp.Id,
+                                    InnerHtml = (wp as TextWebPart)?.InnerHtml,
+                                    WebPartType = (wp as StandardWebPart)?.WebPartType,
+                                }).ToList()
+                            }).ToList()
+                        }).ToList();
+                    }
+
+                    OutputService.Print(new
+                    {
+                        page.Id,
+                        page.Title,
+                        page.Name,
+                        page.Description,
+                        PageLayout = page.PageLayout?.ToString(),
+                        PromotionKind = page.PromotionKind?.ToString(),
+                        PublishingState = page.PublishingState?.Level?.ToString(),
+                        PublishingVersion = page.PublishingState?.VersionId,
+                        page.ShowComments,
+                        page.ShowRecommendedPages,
+                        page.WebUrl,
+                        page.ThumbnailWebUrl,
+                        page.CreatedDateTime,
+                        page.LastModifiedDateTime,
+                        CreatedBy = page.CreatedBy?.User?.DisplayName,
+                        LastModifiedBy = page.LastModifiedBy?.User?.DisplayName,
+                        TitleArea = page.TitleArea != null ? new
+                        {
+                            Layout = page.TitleArea.Layout?.ToString(),
+                            TextAlignment = page.TitleArea.TextAlignment?.ToString(),
+                            ShowAuthor = page.TitleArea.ShowAuthor,
+                            ShowPublishedDate = page.TitleArea.ShowPublishedDate,
+                            page.TitleArea.ImageWebUrl,
+                            page.TitleArea.EnableGradientEffect
+                        } : null,
+                        CanvasLayout = canvasLayout
+                    }, format);
+                }
+                else
+                {
+                    // Fall back to base page (no canvas support)
+                    var basePage = await client.Sites[siteId].Pages[pageId]
+                        .GetAsync(cancellationToken: ct);
+
+                    if (basePage == null)
+                    {
+                        OutputService.PrintError("not_found", "Page not found.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    OutputService.Print(new
+                    {
+                        basePage.Id,
+                        Title = (basePage as SitePage)?.Title ?? basePage.Name,
+                        basePage.Name,
+                        basePage.WebUrl,
+                        basePage.CreatedDateTime,
+                        basePage.LastModifiedDateTime,
+                        CreatedBy = basePage.CreatedBy?.User?.DisplayName,
+                        LastModifiedBy = basePage.LastModifiedBy?.User?.DisplayName
+                    }, format);
+                }
             }
             catch (ODataError ex)
             {

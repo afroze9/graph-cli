@@ -16,6 +16,7 @@ public static class FilesCommands
         filesCommand.Subcommands.Add(BuildGet(formatOption));
         filesCommand.Subcommands.Add(BuildDownload());
         filesCommand.Subcommands.Add(BuildSearch(formatOption));
+        filesCommand.Subcommands.Add(BuildShare(formatOption));
 
         return filesCommand;
     }
@@ -256,6 +257,108 @@ public static class FilesCommands
                     i.WebUrl
                 }).ToList();
                 OutputService.Print(items, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildShare(Option<string> formatOption)
+    {
+        var itemArg = new Argument<string>("item") { Description = "Item ID, or a sharing URL (https://...sharepoint.com/...)" };
+        var recipientsOption = new Option<string>("--recipients") { Description = "Comma-separated email addresses to share with", Required = true };
+        var roleOption = new Option<string>("--role") { DefaultValueFactory = _ => "read", Description = "Permission role: read, write, or owner" };
+        var messageOption = new Option<string?>("--message") { Description = "Optional message to include in the sharing notification" };
+        var driveIdOption = new Option<string?>("--drive-id") { Description = "Drive ID (default: current user's OneDrive)" };
+        var siteOption = new Option<string?>("--site") { Description = "SharePoint site ID or hostname" };
+        var cmd = new Command("share", "Share a file or folder with others") { itemArg, recipientsOption, roleOption, messageOption, driveIdOption, siteOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var item = parseResult.GetValue(itemArg)!;
+            var recipients = parseResult.GetValue(recipientsOption)!;
+            var role = parseResult.GetValue(roleOption) ?? "read";
+            var message = parseResult.GetValue(messageOption);
+            var driveId = parseResult.GetValue(driveIdOption);
+            var site = parseResult.GetValue(siteOption);
+
+            var emails = recipients.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (emails.Length == 0)
+            {
+                OutputService.PrintError("invalid_argument", "At least one recipient email is required.");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            if (!AllowedContactsService.CheckAllAndPrompt(emails, "share"))
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            try
+            {
+                var client = await GraphClientProvider.CreateAsync();
+
+                string resolvedDrive;
+                string resolvedItemId;
+
+                if (IsSharingUrl(item))
+                {
+                    var encoded = EncodeSharingUrl(item);
+                    var sharedItem = await client.Shares[encoded].DriveItem.GetAsync(r =>
+                    {
+                        r.QueryParameters.Select = ["id", "name", "parentReference"];
+                    }, ct);
+
+                    if (sharedItem == null)
+                    {
+                        OutputService.PrintError("not_found", "Item not found.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    resolvedDrive = sharedItem.ParentReference?.DriveId
+                        ?? throw new InvalidOperationException("Could not determine drive ID from sharing URL.");
+                    resolvedItemId = sharedItem.Id!;
+                }
+                else
+                {
+                    resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
+                    resolvedItemId = item;
+                }
+
+                var inviteRecipients = emails.Select(email => new DriveRecipient
+                {
+                    Email = email
+                }).ToList();
+
+                var invite = new Microsoft.Graph.Drives.Item.Items.Item.Invite.InvitePostRequestBody
+                {
+                    Recipients = inviteRecipients,
+                    Roles = [role],
+                    RequireSignIn = true,
+                    SendInvitation = true,
+                    Message = message
+                };
+
+                var permissions = await client.Drives[resolvedDrive].Items[resolvedItemId]
+                    .Invite.PostAsInvitePostResponseAsync(invite, cancellationToken: ct);
+
+                var results = permissions?.Value?.Select(p => new
+                {
+                    p.Id,
+                    Role = p.Roles?.FirstOrDefault(),
+                    Email = p.GrantedToV2?.User?.DisplayName
+                        ?? p.Invitation?.Email,
+                    Link = p.Link?.WebUrl
+                }).ToList();
+
+                OutputService.Print(new { status = "shared", item = resolvedItemId, permissions = results }, format);
             }
             catch (ODataError ex)
             {
