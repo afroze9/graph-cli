@@ -18,5 +18,6 @@ rootCommand.Subcommands.Add(FilesCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(PagesCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(SitesCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(ListsCommands.Build(GlobalOptions.Format));
+rootCommand.Subcommands.Add(McpCommand.Build());
 
 return await rootCommand.Parse(args).InvokeAsync();

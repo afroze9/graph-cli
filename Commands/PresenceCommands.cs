@@ -1,7 +1,5 @@
 using System.CommandLine;
 using GraphCli.Services;
-using Microsoft.Graph;
-using Microsoft.Graph.Communications.GetPresencesByUserId;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
@@ -27,14 +25,8 @@ public static class PresenceCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var presence = await client.Me.Presence.GetAsync(cancellationToken: ct);
-                OutputService.Print(new
-                {
-                    Availability = presence!.Availability,
-                    Activity = presence.Activity,
-                    StatusMessage = presence.StatusMessage?.Message?.Content
-                }, format);
+                var result = await PresenceService.GetMeAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -55,14 +47,8 @@ public static class PresenceCommands
             var userId = parseResult.GetValue(userIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var presence = await client.Communications.Presences[userId].GetAsync(cancellationToken: ct);
-                OutputService.Print(new
-                {
-                    presence!.Id,
-                    Availability = presence.Availability,
-                    Activity = presence.Activity
-                }, format);
+                var result = await PresenceService.GetAsync(userId);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -83,18 +69,8 @@ public static class PresenceCommands
             var userIds = parseResult.GetValue(userIdsOption)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var ids = userIds.Split(',').Select(id => id.Trim()).ToList();
-                var presences = await client.Communications.GetPresencesByUserId.PostAsGetPresencesByUserIdPostResponseAsync(
-                    new GetPresencesByUserIdPostRequestBody { Ids = ids },
-                    cancellationToken: ct);
-                var results = presences?.Value?.Select(p => new
-                {
-                    p.Id,
-                    Availability = p.Availability,
-                    Activity = p.Activity
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await PresenceService.BatchAsync(userIds);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {

@@ -1,7 +1,5 @@
 using System.CommandLine;
 using GraphCli.Services;
-using Microsoft.Graph;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
@@ -30,17 +28,8 @@ public static class TaskCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var lists = await client.Me.Todo.Lists.GetAsync(cancellationToken: ct);
-                var results = lists?.Value?.Select(l => new
-                {
-                    l.Id,
-                    l.DisplayName,
-                    l.IsOwner,
-                    l.IsShared,
-                    WellknownListName = l.WellknownListName?.ToString()
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await TaskService.ListTaskListsAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -64,25 +53,8 @@ public static class TaskCommands
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var tasks = await client.Me.Todo.Lists[listId].Tasks.GetAsync(r =>
-                {
-                    if (!string.IsNullOrEmpty(status))
-                        r.QueryParameters.Filter = $"status eq '{status}'";
-                }, ct);
-                var results = tasks?.Value?.Select(t => new
-                {
-                    t.Id,
-                    t.Title,
-                    Status = t.Status?.ToString(),
-                    Importance = t.Importance?.ToString(),
-                    DueDate = TimeZoneService.ConvertToTimeZone(t.DueDateTime?.DateTime, t.DueDateTime?.TimeZone, tz),
-                    DueTimeZone = tz,
-                    CreatedDateTime = TimeZoneService.ConvertToTimeZone(t.CreatedDateTime, tz),
-                    LastModifiedDateTime = TimeZoneService.ConvertToTimeZone(t.LastModifiedDateTime, tz),
-                    CompletedDateTime = TimeZoneService.ConvertToTimeZone(t.CompletedDateTime?.DateTime, t.CompletedDateTime?.TimeZone, tz)
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await TaskService.ListTasksAsync(listId, status, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -109,33 +81,10 @@ public static class TaskCommands
             var importance = parseResult.GetValue(importanceOption);
             var body = parseResult.GetValue(bodyOption);
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
-
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var task = new TodoTask
-                {
-                    Title = title
-                };
-
-                if (!string.IsNullOrEmpty(due))
-                    task.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = tz };
-
-                if (!string.IsNullOrEmpty(importance))
-                {
-                    task.Importance = importance.ToLower() switch
-                    {
-                        "low" => Microsoft.Graph.Models.Importance.Low,
-                        "high" => Microsoft.Graph.Models.Importance.High,
-                        _ => Microsoft.Graph.Models.Importance.Normal
-                    };
-                }
-
-                if (!string.IsNullOrEmpty(body))
-                    task.Body = new ItemBody { ContentType = BodyType.Text, Content = body };
-
-                var created = await client.Me.Todo.Lists[listId].Tasks.PostAsync(task, cancellationToken: ct);
-                OutputService.Print(new { status = "created", id = created?.Id, title });
+                var result = await TaskService.CreateTaskAsync(listId, title, due, importance, body, tz);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -164,38 +113,10 @@ public static class TaskCommands
             var due = parseResult.GetValue(dueOption);
             var importance = parseResult.GetValue(importanceOption);
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
-
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var update = new TodoTask();
-
-                if (title != null) update.Title = title;
-                if (due != null) update.DueDateTime = new DateTimeTimeZone { DateTime = due, TimeZone = tz };
-
-                if (statusStr != null)
-                {
-                    update.Status = statusStr.ToLower() switch
-                    {
-                        "notstarted" => Microsoft.Graph.Models.TaskStatus.NotStarted,
-                        "inprogress" => Microsoft.Graph.Models.TaskStatus.InProgress,
-                        "completed" => Microsoft.Graph.Models.TaskStatus.Completed,
-                        _ => Microsoft.Graph.Models.TaskStatus.NotStarted
-                    };
-                }
-
-                if (importance != null)
-                {
-                    update.Importance = importance.ToLower() switch
-                    {
-                        "low" => Microsoft.Graph.Models.Importance.Low,
-                        "high" => Microsoft.Graph.Models.Importance.High,
-                        _ => Microsoft.Graph.Models.Importance.Normal
-                    };
-                }
-
-                var updated = await client.Me.Todo.Lists[listId].Tasks[taskId].PatchAsync(update, cancellationToken: ct);
-                OutputService.Print(new { status = "updated", id = updated?.Id });
+                var result = await TaskService.UpdateTaskAsync(listId, taskId, title, statusStr, due, importance, tz);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -217,9 +138,8 @@ public static class TaskCommands
             var taskId = parseResult.GetValue(taskIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                await client.Me.Todo.Lists[listId].Tasks[taskId].DeleteAsync(cancellationToken: ct);
-                OutputService.Print(new { status = "deleted", listId, taskId });
+                var result = await TaskService.DeleteTaskAsync(listId, taskId);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -241,10 +161,8 @@ public static class TaskCommands
             var taskId = parseResult.GetValue(taskIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var update = new TodoTask { Status = Microsoft.Graph.Models.TaskStatus.Completed };
-                var updated = await client.Me.Todo.Lists[listId].Tasks[taskId].PatchAsync(update, cancellationToken: ct);
-                OutputService.Print(new { status = "completed", id = updated?.Id });
+                var result = await TaskService.CompleteTaskAsync(listId, taskId);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {

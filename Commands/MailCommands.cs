@@ -1,12 +1,8 @@
 using System.CommandLine;
 using GraphCli.Services;
-using Microsoft.Graph;
-using Microsoft.Graph.Me.SendMail;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
-
 
 public static class MailCommands
 {
@@ -43,38 +39,8 @@ public static class MailCommands
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                MessageCollectionResponse? messages;
-
-                if (!string.IsNullOrEmpty(folder))
-                {
-                    messages = await client.Me.MailFolders[folder].Messages.GetAsync(r =>
-                    {
-                        r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "from", "receivedDateTime", "isRead", "hasAttachments"];
-                        r.QueryParameters.Orderby = ["receivedDateTime desc"];
-                    }, ct);
-                }
-                else
-                {
-                    messages = await client.Me.Messages.GetAsync(r =>
-                    {
-                        r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "from", "receivedDateTime", "isRead", "hasAttachments"];
-                        r.QueryParameters.Orderby = ["receivedDateTime desc"];
-                    }, ct);
-                }
-
-                var results = messages?.Value?.Select(m => new
-                {
-                    m.Id,
-                    m.Subject,
-                    From = m.From?.EmailAddress?.Address,
-                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(m.ReceivedDateTime, tz),
-                    m.IsRead,
-                    m.HasAttachments
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await MailService.ListAsync(folder, top, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -96,25 +62,8 @@ public static class MailCommands
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var msg = await client.Me.Messages[messageId].GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "subject", "from", "toRecipients", "ccRecipients", "receivedDateTime", "body", "isRead", "hasAttachments", "importance"];
-                }, ct);
-                OutputService.Print(new
-                {
-                    msg!.Id,
-                    msg.Subject,
-                    From = msg.From?.EmailAddress?.Address,
-                    To = msg.ToRecipients?.Select(r => r.EmailAddress?.Address).ToList(),
-                    Cc = msg.CcRecipients?.Select(r => r.EmailAddress?.Address).ToList(),
-                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(msg.ReceivedDateTime, tz),
-                    BodyType = msg.Body?.ContentType?.ToString(),
-                    Body = msg.Body?.Content,
-                    msg.IsRead,
-                    msg.HasAttachments,
-                    Importance = msg.Importance?.ToString()
-                }, format);
+                var result = await MailService.GetAsync(messageId, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -138,22 +87,8 @@ public static class MailCommands
             var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var messages = await client.Me.Messages.GetAsync(r =>
-                {
-                    r.QueryParameters.Search = $"\"{query.Replace("\"", "\\\"")}\"";
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Select = ["id", "subject", "from", "receivedDateTime", "isRead"];
-                }, ct);
-                var results = messages?.Value?.Select(m => new
-                {
-                    m.Id,
-                    m.Subject,
-                    From = m.From?.EmailAddress?.Address,
-                    ReceivedDateTime = TimeZoneService.ConvertToTimeZone(m.ReceivedDateTime, tz),
-                    m.IsRead
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await MailService.SearchAsync(query, top, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -175,10 +110,7 @@ public static class MailCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var to = parseResult.GetValue(toOption)!;
-            var subject = parseResult.GetValue(subjectOption)!;
-            var body = parseResult.GetValue(bodyOption)!;
             var cc = parseResult.GetValue(ccOption);
-            var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
 
             var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
             if (!string.IsNullOrEmpty(cc))
@@ -192,36 +124,13 @@ public static class MailCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var message = new Message
-                {
-                    Subject = subject,
-                    Body = new ItemBody
-                    {
-                        ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
-                        Content = body
-                    },
-                    ToRecipients = to.Split(',').Select(e => new Recipient
-                    {
-                        EmailAddress = new EmailAddress { Address = e.Trim() }
-                    }).ToList()
-                };
-
-                if (!string.IsNullOrEmpty(cc))
-                {
-                    message.CcRecipients = cc.Split(',').Select(e => new Recipient
-                    {
-                        EmailAddress = new EmailAddress { Address = e.Trim() }
-                    }).ToList();
-                }
-
-                await client.Me.SendMail.PostAsync(new SendMailPostRequestBody
-                {
-                    Message = message,
-                    SaveToSentItems = true
-                }, cancellationToken: ct);
-
-                OutputService.Print(new { status = "sent", subject, to });
+                var result = await MailService.SendAsync(
+                    to,
+                    parseResult.GetValue(subjectOption)!,
+                    parseResult.GetValue(bodyOption)!,
+                    cc,
+                    parseResult.GetValue(contentTypeOption) ?? "text");
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -242,10 +151,6 @@ public static class MailCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var to = parseResult.GetValue(toOption)!;
-            var subject = parseResult.GetValue(subjectOption)!;
-            var body = parseResult.GetValue(bodyOption)!;
-            var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
-
             var recipients = to.Split(',').Select(e => e.Trim());
             if (!AllowedContactsService.CheckAllAndPrompt(recipients, "email"))
             {
@@ -255,23 +160,12 @@ public static class MailCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var message = new Message
-                {
-                    Subject = subject,
-                    Body = new ItemBody
-                    {
-                        ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
-                        Content = body
-                    },
-                    ToRecipients = to.Split(',').Select(e => new Recipient
-                    {
-                        EmailAddress = new EmailAddress { Address = e.Trim() }
-                    }).ToList()
-                };
-
-                var draft = await client.Me.Messages.PostAsync(message, cancellationToken: ct);
-                OutputService.Print(new { status = "draft_created", id = draft?.Id, subject });
+                var result = await MailService.DraftAsync(
+                    to,
+                    parseResult.GetValue(subjectOption)!,
+                    parseResult.GetValue(bodyOption)!,
+                    parseResult.GetValue(contentTypeOption) ?? "text");
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -288,12 +182,10 @@ public static class MailCommands
         var cmd = new Command("send-draft", "Send an existing draft") { messageIdArg };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageId = parseResult.GetValue(messageIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                await client.Me.Messages[messageId].Send.PostAsync(cancellationToken: ct);
-                OutputService.Print(new { status = "sent", messageId });
+                var result = await MailService.SendDraftAsync(parseResult.GetValue(messageIdArg)!);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -311,29 +203,12 @@ public static class MailCommands
         var cmd = new Command("move", "Move one or more messages to a folder") { messageIdsArg, folderOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageIds = parseResult.GetValue(messageIdsArg)!;
-            var folder = parseResult.GetValue(folderOption)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var results = new List<object>();
-                foreach (var messageId in messageIds)
-                {
-                    try
-                    {
-                        var moved = await client.Me.Messages[messageId].Move.PostAsync(
-                            new Microsoft.Graph.Me.Messages.Item.Move.MovePostRequestBody
-                            {
-                                DestinationId = folder
-                            }, cancellationToken: ct);
-                        results.Add(new { status = "moved", messageId = moved?.Id, folder });
-                    }
-                    catch (ODataError ex)
-                    {
-                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
-                    }
-                }
-                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
+                var result = await MailService.MoveAsync(
+                    parseResult.GetValue(messageIdsArg)!,
+                    parseResult.GetValue(folderOption)!);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -350,24 +225,10 @@ public static class MailCommands
         var cmd = new Command("delete", "Delete one or more messages") { messageIdsArg };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageIds = parseResult.GetValue(messageIdsArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var results = new List<object>();
-                foreach (var messageId in messageIds)
-                {
-                    try
-                    {
-                        await client.Me.Messages[messageId].DeleteAsync(cancellationToken: ct);
-                        results.Add(new { status = "deleted", messageId });
-                    }
-                    catch (ODataError ex)
-                    {
-                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
-                    }
-                }
-                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
+                var result = await MailService.DeleteAsync(parseResult.GetValue(messageIdsArg)!);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -385,29 +246,12 @@ public static class MailCommands
         var cmd = new Command("mark-read", "Mark one or more messages as read or unread") { messageIdsArg, unreadOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageIds = parseResult.GetValue(messageIdsArg)!;
-            var unread = parseResult.GetValue(unreadOption);
-            var isRead = !unread;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var results = new List<object>();
-                foreach (var messageId in messageIds)
-                {
-                    try
-                    {
-                        await client.Me.Messages[messageId].PatchAsync(new Message
-                        {
-                            IsRead = isRead
-                        }, cancellationToken: ct);
-                        results.Add(new { status = isRead ? "marked_read" : "marked_unread", messageId });
-                    }
-                    catch (ODataError ex)
-                    {
-                        results.Add(new { status = "error", messageId, error = ex.Error?.Message ?? ex.Message });
-                    }
-                }
-                OutputService.Print(messageIds.Length == 1 ? results[0] : results);
+                var result = await MailService.MarkReadAsync(
+                    parseResult.GetValue(messageIdsArg)!,
+                    parseResult.GetValue(unreadOption));
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -425,37 +269,10 @@ public static class MailCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
-            var parentId = parseResult.GetValue(parentOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                MailFolderCollectionResponse? folders;
-
-                if (!string.IsNullOrEmpty(parentId))
-                {
-                    folders = await client.Me.MailFolders[parentId].ChildFolders.GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount", "childFolderCount"];
-                    }, ct);
-                }
-                else
-                {
-                    folders = await client.Me.MailFolders.GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "displayName", "totalItemCount", "unreadItemCount", "childFolderCount"];
-                    }, ct);
-                }
-
-                var results = folders?.Value?.Select(f => new
-                {
-                    f.Id,
-                    f.DisplayName,
-                    f.ParentFolderId,
-                    f.TotalItemCount,
-                    f.UnreadItemCount,
-                    f.ChildFolderCount
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await MailService.FoldersAsync(parseResult.GetValue(parentOption));
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -473,23 +290,10 @@ public static class MailCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
-            var messageId = parseResult.GetValue(messageIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var attachments = await client.Me.Messages[messageId].Attachments.GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "name", "contentType", "size", "isInline"];
-                }, ct);
-                var results = attachments?.Value?.Select(a => new
-                {
-                    a.Id,
-                    a.Name,
-                    a.ContentType,
-                    a.Size,
-                    a.IsInline
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await MailService.AttachmentsAsync(parseResult.GetValue(messageIdArg)!);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -508,25 +312,18 @@ public static class MailCommands
         var cmd = new Command("download-attachment", "Download an attachment to a file") { messageIdArg, attachmentIdArg, outOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var messageId = parseResult.GetValue(messageIdArg)!;
-            var attachmentId = parseResult.GetValue(attachmentIdArg)!;
-            var outPath = parseResult.GetValue(outOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var attachment = await client.Me.Messages[messageId].Attachments[attachmentId].GetAsync(cancellationToken: ct);
-
-                if (attachment is FileAttachment fileAttachment && fileAttachment.ContentBytes != null)
-                {
-                    var fileName = outPath ?? Path.GetFileName(fileAttachment.Name) ?? "attachment";
-                    await File.WriteAllBytesAsync(fileName, fileAttachment.ContentBytes, ct);
-                    OutputService.Print(new { status = "downloaded", file = fileName, size = fileAttachment.ContentBytes.Length });
-                }
-                else
-                {
-                    OutputService.PrintError("unsupported", "Only file attachments can be downloaded. Item and reference attachments are not supported.");
-                    Environment.ExitCode = 1;
-                }
+                var result = await MailService.DownloadAttachmentAsync(
+                    parseResult.GetValue(messageIdArg)!,
+                    parseResult.GetValue(attachmentIdArg)!,
+                    parseResult.GetValue(outOption));
+                OutputService.Print(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                OutputService.PrintError("unsupported", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {

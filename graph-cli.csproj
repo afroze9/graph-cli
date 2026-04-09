@@ -10,7 +10,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>graph-cli</ToolCommandName>
     <PackageId>graph-cli</PackageId>
-    <Version>1.15.0</Version>
+    <Version>2.0.0</Version>
     <PackageIcon>icon.png</PackageIcon>
     <Authors>Afroze Amjad</Authors>
     <Description>A .NET global tool for interacting with Microsoft Graph — manage emails, calendar events, Teams chats, To Do tasks, presence, user directory, and OneDrive/SharePoint files from the command line.</Description>
@@ -27,6 +27,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
+    <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.5" />
     <PackageReference Include="Microsoft.Graph" Version="5.103.0" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.69.1" />

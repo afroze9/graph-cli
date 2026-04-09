@@ -29,51 +29,8 @@ public static class SitesCommands
             var refresh = parseResult.GetValue(refreshOption);
             try
             {
-                // Check cache first
-                if (!refresh)
-                {
-                    var cached = SiteCacheService.Search(query, top);
-                    if (cached.Count > 0)
-                    {
-                        var cachedResults = cached.Select(s => new
-                        {
-                            s.Id,
-                            s.Name,
-                            s.DisplayName,
-                            s.WebUrl,
-                            Source = "cache"
-                        }).ToList();
-                        OutputService.Print(cachedResults, format);
-                        return;
-                    }
-                }
-
-                var client = await GraphClientProvider.CreateAsync();
-
-                var sites = await client.Sites.GetAsync(r =>
-                {
-                    r.QueryParameters.Search = query;
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Select = ["id", "name", "displayName", "webUrl", "description"];
-                }, ct);
-
-                // Cache results
-                if (sites?.Value != null)
-                {
-                    SiteCacheService.UpsertMany(sites.Value
-                        .Where(s => s.Id != null && s.Name != null)
-                        .Select(s => (s.Id!, s.Name!, s.DisplayName, s.WebUrl)));
-                }
-
-                var results = sites?.Value?.Select(s => new
-                {
-                    s.Id,
-                    s.Name,
-                    s.DisplayName,
-                    s.Description,
-                    s.WebUrl
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await SiteService.SearchAsync(query, top, refresh);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {

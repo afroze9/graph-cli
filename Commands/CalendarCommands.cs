@@ -1,10 +1,5 @@
 using System.CommandLine;
-using System.Xml;
 using GraphCli.Services;
-using Microsoft.Graph;
-using Microsoft.Graph.Me.Calendar.GetSchedule;
-using Microsoft.Graph.Me.FindMeetingTimes;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
@@ -36,22 +31,8 @@ public static class CalendarCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var calendars = await client.Me.Calendars.GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "name", "color", "isDefaultCalendar", "canEdit", "owner"];
-                }, ct);
-                var results = calendars?.Value?.Select(c => new
-                {
-                    c.Id,
-                    c.Name,
-                    Color = c.Color?.ToString(),
-                    c.IsDefaultCalendar,
-                    c.CanEdit,
-                    OwnerName = c.Owner?.Name,
-                    OwnerEmail = c.Owner?.Address
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await CalendarService.ListAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -72,60 +53,16 @@ public static class CalendarCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
-            var start = parseResult.GetValue(startOption) ?? DateTime.Today.ToString("o");
-            var end = parseResult.GetValue(endOption) ?? DateTime.Today.AddDays(7).ToString("o");
+            var start = parseResult.GetValue(startOption);
+            var end = parseResult.GetValue(endOption);
             var calendarId = parseResult.GetValue(calendarIdOption);
             var top = parseResult.GetValue(topOption);
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var tz = parseResult.GetValue(timezoneOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                EventCollectionResponse? events;
-
-                if (!string.IsNullOrEmpty(calendarId))
-                {
-                    events = await client.Me.Calendars[calendarId].CalendarView.GetAsync(r =>
-                    {
-                        r.QueryParameters.StartDateTime = start;
-                        r.QueryParameters.EndDateTime = end;
-                        r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories", "type", "seriesMasterId"];
-                        r.QueryParameters.Orderby = ["start/dateTime"];
-                        r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
-                    }, ct);
-                }
-                else
-                {
-                    events = await client.Me.CalendarView.GetAsync(r =>
-                    {
-                        r.QueryParameters.StartDateTime = start;
-                        r.QueryParameters.EndDateTime = end;
-                        r.QueryParameters.Top = top;
-                        r.QueryParameters.Select = ["id", "subject", "start", "end", "location", "organizer", "isAllDay", "isCancelled", "responseStatus", "categories", "type", "seriesMasterId"];
-                        r.QueryParameters.Orderby = ["start/dateTime"];
-                        r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
-                    }, ct);
-                }
-
-                var results = events?.Value?.Select(e => new
-                {
-                    e.Id,
-                    e.Subject,
-                    StartDateTime = e.Start?.DateTime,
-                    StartTimeZone = e.Start?.TimeZone,
-                    EndDateTime = e.End?.DateTime,
-                    EndTimeZone = e.End?.TimeZone,
-                    Location = e.Location?.DisplayName,
-                    Organizer = e.Organizer?.EmailAddress?.Address,
-                    e.IsAllDay,
-                    e.IsCancelled,
-                    Response = e.ResponseStatus?.Response?.ToString(),
-                    Categories = e.Categories,
-                    Type = e.Type?.ToString(),
-                    e.SeriesMasterId
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await CalendarService.EventsAsync(start, end, calendarId, top, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -144,69 +81,11 @@ public static class CalendarCommands
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             var eventId = parseResult.GetValue(eventIdArg)!;
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var tz = parseResult.GetValue(timezoneOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var e = await client.Me.Events[eventId].GetAsync(r =>
-                {
-                    r.QueryParameters.Select =
-                    [
-                        "id", "subject", "body", "bodyPreview", "start", "end",
-                        "location", "locations", "organizer", "attendees",
-                        "isOnlineMeeting", "onlineMeeting", "onlineMeetingProvider",
-                        "importance", "sensitivity", "isAllDay", "isCancelled",
-                        "responseStatus", "categories", "hasAttachments",
-                        "recurrence", "type", "seriesMasterId", "webLink"
-                    ];
-                    r.Headers.Add("Prefer", $"outlook.timezone=\"{tz}\"");
-                }, ct);
-
-                OutputService.Print(new
-                {
-                    e!.Id,
-                    e.Subject,
-                    BodyType = e.Body?.ContentType?.ToString(),
-                    Body = e.Body?.Content,
-                    e.BodyPreview,
-                    StartDateTime = e.Start?.DateTime,
-                    StartTimeZone = e.Start?.TimeZone,
-                    EndDateTime = e.End?.DateTime,
-                    EndTimeZone = e.End?.TimeZone,
-                    Location = e.Location?.DisplayName,
-                    Locations = e.Locations?.Select(l => l.DisplayName).ToList(),
-                    Organizer = e.Organizer?.EmailAddress?.Address,
-                    Attendees = e.Attendees?.Select(a => new
-                    {
-                        Name = a.EmailAddress?.Name,
-                        Email = a.EmailAddress?.Address,
-                        Type = a.Type?.ToString(),
-                        Response = a.Status?.Response?.ToString(),
-                        ResponseTime = a.Status?.Time?.ToString("o")
-                    }).ToList(),
-                    e.IsOnlineMeeting,
-                    JoinUrl = e.OnlineMeeting?.JoinUrl,
-                    OnlineMeetingProvider = e.OnlineMeetingProvider?.ToString(),
-                    Importance = e.Importance?.ToString(),
-                    Sensitivity = e.Sensitivity?.ToString(),
-                    e.IsAllDay,
-                    e.IsCancelled,
-                    Response = e.ResponseStatus?.Response?.ToString(),
-                    e.Categories,
-                    e.HasAttachments,
-                    Type = e.Type?.ToString(),
-                    e.SeriesMasterId,
-                    Recurrence = e.Recurrence != null ? new
-                    {
-                        Pattern = e.Recurrence.Pattern?.Type?.ToString(),
-                        Interval = e.Recurrence.Pattern?.Interval,
-                        DaysOfWeek = e.Recurrence.Pattern?.DaysOfWeek?.Select(d => d.ToString()).ToList(),
-                        RangeType = e.Recurrence.Range?.Type?.ToString(),
-                        RangeStart = e.Recurrence.Range?.StartDate?.ToString(),
-                        RangeEnd = e.Recurrence.Range?.EndDate?.ToString()
-                    } : null,
-                    e.WebLink
-                }, format);
+                var result = await CalendarService.GetEventAsync(eventId, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -243,49 +122,14 @@ public static class CalendarCommands
             var location = parseResult.GetValue(locationOption);
             var onlineMeeting = parseResult.GetValue(onlineMeetingOption);
             var calendarId = parseResult.GetValue(calendarIdOption);
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var tz = parseResult.GetValue(timezoneOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var newEvent = new Event
-                {
-                    Subject = subject,
-                    Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
-                    End = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
-                };
-
-                if (!string.IsNullOrEmpty(body))
-                    newEvent.Body = new ItemBody { ContentType = contentType == "html" ? BodyType.Html : BodyType.Text, Content = body };
-
-                if (!string.IsNullOrEmpty(attendees))
-                {
-                    newEvent.Attendees = attendees.Split(',').Select(e => new Attendee
-                    {
-                        EmailAddress = new EmailAddress { Address = e.Trim() },
-                        Type = AttendeeType.Required
-                    }).ToList();
-                }
-
-                if (!string.IsNullOrEmpty(categories))
-                    newEvent.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
-
-                if (!string.IsNullOrEmpty(location))
-                    newEvent.Location = new Location { DisplayName = location };
-
-                if (onlineMeeting)
-                {
-                    newEvent.IsOnlineMeeting = true;
-                    newEvent.OnlineMeetingProvider = OnlineMeetingProviderType.TeamsForBusiness;
-                }
-
-                Event? created;
-                if (!string.IsNullOrEmpty(calendarId))
-                    created = await client.Me.Calendars[calendarId].Events.PostAsync(newEvent, cancellationToken: ct);
-                else
-                    created = await client.Me.Events.PostAsync(newEvent, cancellationToken: ct);
-
-                OutputService.Print(new { status = "created", id = created?.Id, subject, start, end, joinUrl = created?.OnlineMeeting?.JoinUrl });
+                var result = await CalendarService.CreateEventAsync(
+                    subject, start, end, attendees, body, contentType,
+                    categories, location, onlineMeeting, calendarId, tz);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -317,46 +161,22 @@ public static class CalendarCommands
             var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
             var categories = parseResult.GetValue(categoriesOption);
             var series = parseResult.GetValue(seriesOption);
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var tz = parseResult.GetValue(timezoneOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                if (series)
-                {
-                    var existing = await client.Me.Events[eventId].GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["type", "seriesMasterId"];
-                    }, ct);
-
-                    var eventType = existing?.Type?.ToString();
-                    if (eventType == "Occurrence" || eventType == "Exception")
-                    {
-                        eventId = existing!.SeriesMasterId!;
-                    }
-                    else if (eventType != "SeriesMaster")
-                    {
-                        OutputService.PrintError("not_recurring", "Event is not part of a recurring series");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-                }
-
-                var update = new Event();
-
-                if (subject != null) update.Subject = subject;
-                if (start != null) update.Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz };
-                if (end != null) update.End = new DateTimeTimeZone { DateTime = end, TimeZone = tz };
-                if (body != null) update.Body = new ItemBody { ContentType = contentType == "html" ? BodyType.Html : BodyType.Text, Content = body };
-                if (categories != null) update.Categories = categories.Split(',').Select(c => c.Trim()).ToList();
-
-                var updated = await client.Me.Events[eventId].PatchAsync(update, cancellationToken: ct);
-                OutputService.Print(new { status = "updated", id = updated?.Id, series });
+                var result = await CalendarService.UpdateEventAsync(
+                    eventId, subject, start, end, body, contentType, categories, series, tz);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
                 OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+            catch (InvalidOperationException ex)
+            {
+                OutputService.PrintError("not_recurring", ex.Message);
                 Environment.ExitCode = 1;
             }
         });
@@ -372,9 +192,8 @@ public static class CalendarCommands
             var eventId = parseResult.GetValue(eventIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                await client.Me.Events[eventId].DeleteAsync(cancellationToken: ct);
-                OutputService.Print(new { status = "deleted", eventId });
+                var result = await CalendarService.DeleteEventAsync(eventId);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -394,48 +213,22 @@ public static class CalendarCommands
         cmd.SetAction(async (parseResult, ct) =>
         {
             var eventId = parseResult.GetValue(eventIdArg)!;
-            var action = parseResult.GetValue(actionOption)!.ToLower();
+            var action = parseResult.GetValue(actionOption)!;
             var comment = parseResult.GetValue(commentOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                switch (action)
-                {
-                    case "accept":
-                        await client.Me.Events[eventId].Accept.PostAsync(
-                            new Microsoft.Graph.Me.Events.Item.Accept.AcceptPostRequestBody
-                            {
-                                Comment = comment,
-                                SendResponse = true
-                            }, cancellationToken: ct);
-                        break;
-                    case "decline":
-                        await client.Me.Events[eventId].Decline.PostAsync(
-                            new Microsoft.Graph.Me.Events.Item.Decline.DeclinePostRequestBody
-                            {
-                                Comment = comment,
-                                SendResponse = true
-                            }, cancellationToken: ct);
-                        break;
-                    case "tentative":
-                        await client.Me.Events[eventId].TentativelyAccept.PostAsync(
-                            new Microsoft.Graph.Me.Events.Item.TentativelyAccept.TentativelyAcceptPostRequestBody
-                            {
-                                Comment = comment,
-                                SendResponse = true
-                            }, cancellationToken: ct);
-                        break;
-                    default:
-                        OutputService.PrintError("invalid_action", "Action must be: accept, decline, or tentative");
-                        Environment.ExitCode = 1;
-                        return;
-                }
-                OutputService.Print(new { status = "responded", eventId, action });
+                var result = await CalendarService.RespondAsync(eventId, action, comment);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
                 OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+            catch (InvalidOperationException ex)
+            {
+                OutputService.PrintError("invalid_action", ex.Message);
                 Environment.ExitCode = 1;
             }
         });
@@ -454,51 +247,14 @@ public static class CalendarCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             var attendees = parseResult.GetValue(attendeesOption)!;
             var duration = parseResult.GetValue(durationOption);
-            var start = parseResult.GetValue(startOption) ?? DateTime.Now.ToString("o");
-            var end = parseResult.GetValue(endOption) ?? DateTime.Now.AddDays(7).ToString("o");
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var start = parseResult.GetValue(startOption);
+            var end = parseResult.GetValue(endOption);
+            var tz = parseResult.GetValue(timezoneOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var result = await client.Me.FindMeetingTimes.PostAsync(new FindMeetingTimesPostRequestBody
-                {
-                    Attendees = attendees.Split(',').Select(e => new AttendeeBase
-                    {
-                        EmailAddress = new EmailAddress { Address = e.Trim() },
-                        Type = AttendeeType.Required
-                    }).ToList(),
-                    TimeConstraint = new TimeConstraint
-                    {
-                        TimeSlots = [new TimeSlot
-                        {
-                            Start = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
-                            End = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
-                        }]
-                    },
-                    MeetingDuration = XmlConvert.ToTimeSpan($"PT{duration}M"),
-                    ReturnSuggestionReasons = true
-                }, cancellationToken: ct);
-
-                var suggestions = result?.MeetingTimeSuggestions?.Select(s => new
-                {
-                    StartDateTime = s.MeetingTimeSlot?.Start?.DateTime,
-                    StartTimeZone = s.MeetingTimeSlot?.Start?.TimeZone,
-                    EndDateTime = s.MeetingTimeSlot?.End?.DateTime,
-                    EndTimeZone = s.MeetingTimeSlot?.End?.TimeZone,
-                    Confidence = s.Confidence,
-                    OrganizerAvailability = s.OrganizerAvailability?.ToString(),
-                    SuggestionReason = s.SuggestionReason
-                }).ToList();
-
-                if (suggestions == null || suggestions.Count == 0)
-                {
-                    OutputService.Print(new { status = "no_suggestions", reason = result?.EmptySuggestionsReason ?? "unknown" }, format);
-                }
-                else
-                {
-                    OutputService.Print(suggestions, format);
-                }
+                var result = await CalendarService.FindTimesAsync(attendees, duration, start, end, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -521,37 +277,12 @@ public static class CalendarCommands
             var users = parseResult.GetValue(usersOption)!;
             var start = parseResult.GetValue(startOption)!;
             var end = parseResult.GetValue(endOption)!;
-            var tz = TimeZoneService.ResolveTimeZoneId(parseResult.GetValue(timezoneOption));
+            var tz = parseResult.GetValue(timezoneOption);
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var result = await client.Me.Calendar.GetSchedule.PostAsGetSchedulePostResponseAsync(
-                    new GetSchedulePostRequestBody
-                    {
-                        Schedules = users.Split(',').Select(e => e.Trim()).ToList(),
-                        StartTime = new DateTimeTimeZone { DateTime = start, TimeZone = tz },
-                        EndTime = new DateTimeTimeZone { DateTime = end, TimeZone = tz }
-                    }, cancellationToken: ct);
-
-                var schedules = result?.Value?.Select(s => new
-                {
-                    User = s.ScheduleId,
-                    AvailabilityView = s.AvailabilityView,
-                    Items = s.ScheduleItems?.Select(i => new
-                    {
-                        Status = i.Status?.ToString(),
-                        Subject = i.Subject,
-                        Location = i.Location,
-                        StartDateTime = i.Start?.DateTime,
-                        StartTimeZone = i.Start?.TimeZone,
-                        EndDateTime = i.End?.DateTime,
-                        EndTimeZone = i.End?.TimeZone,
-                        i.IsPrivate
-                    }).ToList()
-                }).ToList();
-
-                OutputService.Print(schedules, format);
+                var result = await CalendarService.ScheduleAsync(users, start, end, tz);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {

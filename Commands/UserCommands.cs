@@ -1,6 +1,5 @@
 using System.CommandLine;
 using GraphCli.Services;
-using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
@@ -18,23 +17,8 @@ public static class UserCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var me = await client.Me.GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "displayName", "mail", "userPrincipalName", "jobTitle", "department", "officeLocation", "mobilePhone", "businessPhones"];
-                }, ct);
-                OutputService.Print(new
-                {
-                    me!.Id,
-                    me.DisplayName,
-                    me.Mail,
-                    me.UserPrincipalName,
-                    me.JobTitle,
-                    me.Department,
-                    me.OfficeLocation,
-                    me.MobilePhone,
-                    me.BusinessPhones
-                }, format);
+                var result = await UserService.GetMeAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -52,20 +36,8 @@ public static class UserCommands
             var userId = parseResult.GetValue(userIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var user = await client.Users[userId].GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "displayName", "mail", "userPrincipalName", "jobTitle", "department"];
-                }, ct);
-                OutputService.Print(new
-                {
-                    user!.Id,
-                    user.DisplayName,
-                    user.Mail,
-                    user.UserPrincipalName,
-                    user.JobTitle,
-                    user.Department
-                }, format);
+                var result = await UserService.GetUserAsync(userId);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -83,23 +55,8 @@ public static class UserCommands
             var query = parseResult.GetValue(queryOption)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var users = await client.Users.GetAsync(r =>
-                {
-                    var escaped = query.Replace("'", "''");
-                    r.QueryParameters.Filter = $"startsWith(displayName,'{escaped}') or startsWith(mail,'{escaped}')";
-                    r.QueryParameters.Select = ["id", "displayName", "mail", "userPrincipalName", "jobTitle"];
-                    r.QueryParameters.Top = 25;
-                }, ct);
-                var results = users?.Value?.Select(u => new
-                {
-                    u.Id,
-                    u.DisplayName,
-                    u.Mail,
-                    u.UserPrincipalName,
-                    u.JobTitle
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await UserService.SearchAsync(query);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -115,17 +72,8 @@ public static class UserCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var manager = await client.Me.Manager.GetAsync(cancellationToken: ct);
-                var props = manager?.AdditionalData;
-                OutputService.Print(new
-                {
-                    id = GetProp(props, "id"),
-                    displayName = GetProp(props, "displayName"),
-                    mail = GetProp(props, "mail"),
-                    userPrincipalName = GetProp(props, "userPrincipalName"),
-                    jobTitle = GetProp(props, "jobTitle")
-                }, format);
+                var result = await UserService.GetManagerAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -141,16 +89,8 @@ public static class UserCommands
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var reports = await client.Me.DirectReports.GetAsync(cancellationToken: ct);
-                var results = reports?.Value?.Select(r => new
-                {
-                    id = GetProp(r.AdditionalData, "id"),
-                    displayName = GetProp(r.AdditionalData, "displayName"),
-                    mail = GetProp(r.AdditionalData, "mail"),
-                    userPrincipalName = GetProp(r.AdditionalData, "userPrincipalName")
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await UserService.GetReportsAsync();
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -165,12 +105,5 @@ public static class UserCommands
         userCommand.Subcommands.Add(managerCommand);
         userCommand.Subcommands.Add(reportsCommand);
         return userCommand;
-    }
-
-    private static string? GetProp(IDictionary<string, object>? data, string key)
-    {
-        if (data != null && data.TryGetValue(key, out var value))
-            return value?.ToString();
-        return null;
     }
 }

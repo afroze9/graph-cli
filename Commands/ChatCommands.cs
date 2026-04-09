@@ -34,30 +34,8 @@ public static class ChatCommands
             var top = parseResult.GetValue(topOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var chats = await client.Me.Chats.GetAsync(r =>
-                {
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime"];
-                }, ct);
-                var results = chats?.Value?.Select(c => new
-                {
-                    c.Id,
-                    c.Topic,
-                    ChatType = c.ChatType?.ToString(),
-                    c.CreatedDateTime,
-                    c.LastUpdatedDateTime
-                }).ToList();
-
-                // Cache results
-                if (chats?.Value != null)
-                {
-                    ChatCacheService.UpsertMany(chats.Value
-                        .Where(c => c.Id != null)
-                        .Select(c => (c.Id!, c.Topic, c.ChatType?.ToString())));
-                }
-
-                OutputService.Print(results, format);
+                var result = await ChatService.ListAsync(top);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -80,65 +58,10 @@ public static class ChatCommands
             var query = parseResult.GetValue(queryOption)!;
             var top = parseResult.GetValue(topOption);
             var refresh = parseResult.GetValue(refreshOption);
-
-            // Check cache first
-            if (!refresh)
-            {
-                var cached = ChatCacheService.Search(query, top);
-                if (cached.Count > 0)
-                {
-                    var cachedResults = cached.Select(c => new
-                    {
-                        c.Id,
-                        Topic = c.Name,
-                        c.ChatType,
-                        c.LastUsed,
-                        Source = "cache"
-                    }).ToList();
-                    OutputService.Print(cachedResults, format);
-                    return;
-                }
-            }
-
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var matched = new List<Chat>();
-
-                var page = await client.Me.Chats.GetAsync(r =>
-                {
-                    r.QueryParameters.Top = 50;
-                    r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime"];
-                }, ct);
-
-                while (page?.Value != null)
-                {
-                    // Cache every page as we go
-                    ChatCacheService.UpsertMany(page.Value
-                        .Where(c => c.Id != null)
-                        .Select(c => (c.Id!, c.Topic, c.ChatType?.ToString())));
-
-                    foreach (var c in page.Value)
-                    {
-                        if (c.Topic != null && c.Topic.Contains(query, StringComparison.OrdinalIgnoreCase))
-                        {
-                            matched.Add(c);
-                            if (matched.Count >= top) break;
-                        }
-                    }
-                    if (matched.Count >= top || string.IsNullOrEmpty(page.OdataNextLink)) break;
-                    page = await client.Me.Chats.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: ct);
-                }
-
-                var results = matched.Select(c => new
-                {
-                    c.Id,
-                    c.Topic,
-                    ChatType = c.ChatType?.ToString(),
-                    c.CreatedDateTime,
-                    c.LastUpdatedDateTime
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await ChatService.SearchAsync(query, top, refresh);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -159,21 +82,8 @@ public static class ChatCommands
             var chatId = parseResult.GetValue(chatIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var chat = await client.Me.Chats[chatId].GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime", "webUrl"];
-                }, ct);
-                ChatCacheService.Upsert(chat!.Id!, chat.Topic, chat.ChatType?.ToString());
-                OutputService.Print(new
-                {
-                    chat.Id,
-                    chat.Topic,
-                    ChatType = chat.ChatType?.ToString(),
-                    chat.CreatedDateTime,
-                    chat.LastUpdatedDateTime,
-                    chat.WebUrl
-                }, format);
+                var result = await ChatService.GetAsync(chatId);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -205,51 +115,8 @@ public static class ChatCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                // Get current user's ID for the member list
-                var me = await client.Me.GetAsync(r =>
-                {
-                    r.QueryParameters.Select = ["id"];
-                }, ct);
-
-                var memberEmailList = members.Split(',').Select(e => e.Trim()).ToList();
-                var chatMembers = new List<ConversationMember>();
-
-                // Add current user
-                chatMembers.Add(new AadUserConversationMember
-                {
-                    Roles = ["owner"],
-                    AdditionalData = new Dictionary<string, object>
-                    {
-                        ["user@odata.bind"] = $"https://graph.microsoft.com/v1.0/users('{me!.Id}')"
-                    }
-                });
-
-                // Add other members
-                foreach (var email in memberEmailList)
-                {
-                    chatMembers.Add(new AadUserConversationMember
-                    {
-                        Roles = ["owner"],
-                        AdditionalData = new Dictionary<string, object>
-                        {
-                            ["user@odata.bind"] = $"https://graph.microsoft.com/v1.0/users('{email}')"
-                        }
-                    });
-                }
-
-                var chat = new Chat
-                {
-                    ChatType = type == "group" ? ChatType.Group : ChatType.OneOnOne,
-                    Topic = topic,
-                    Members = chatMembers
-                };
-
-                var created = await client.Chats.PostAsync(chat, cancellationToken: ct);
-                if (created?.Id != null)
-                    ChatCacheService.Upsert(created.Id, topic, type);
-                OutputService.Print(new { status = "created", id = created?.Id, chatType = type, topic });
+                var result = await ChatService.CreateAsync(members, topic, type);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -270,16 +137,8 @@ public static class ChatCommands
             var chatId = parseResult.GetValue(chatIdArg)!;
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var members = await client.Me.Chats[chatId].Members.GetAsync(cancellationToken: ct);
-                var results = members?.Value?.Select(m => new
-                {
-                    m.Id,
-                    m.DisplayName,
-                    m.Roles,
-                    Email = (m as AadUserConversationMember)?.Email
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await ChatService.MembersAsync(chatId);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -302,22 +161,8 @@ public static class ChatCommands
             var top = parseResult.GetValue(topOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var messages = await client.Me.Chats[chatId].Messages.GetAsync(r =>
-                {
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Orderby = ["createdDateTime desc"];
-                }, ct);
-                var results = messages?.Value?.Select(m => new
-                {
-                    m.Id,
-                    From = m.From?.User?.DisplayName ?? m.From?.Application?.DisplayName,
-                    BodyType = m.Body?.ContentType?.ToString(),
-                    Body = m.Body?.Content,
-                    m.CreatedDateTime,
-                    MessageType = m.MessageType?.ToString()
-                }).ToList();
-                OutputService.Print(results, format);
+                var result = await ChatService.MessagesAsync(chatId, top);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -328,60 +173,17 @@ public static class ChatCommands
         return cmd;
     }
 
-    private static List<ChatMessageMention> ParseMentions(string mentionsValue)
-    {
-        var mentions = new List<ChatMessageMention>();
-        foreach (var pair in mentionsValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var parts = pair.Split(':', 2);
-            if (parts.Length != 2) continue;
-            mentions.Add(new ChatMessageMention
-            {
-                Id = int.Parse(parts[0]),
-                MentionText = parts[1],
-                Mentioned = new ChatMessageMentionedIdentitySet
-                {
-                    User = new Identity { AdditionalData = new Dictionary<string, object>
-                    {
-                        ["userIdentityType"] = "aadUser"
-                    }, DisplayName = parts[1], Id = null }
-                }
-            });
-        }
-        return mentions;
-    }
-
-    private static async Task ResolveMentionUserIds(GraphServiceClient client, List<ChatMessageMention> mentions, CancellationToken ct)
-    {
-        foreach (var mention in mentions)
-        {
-            try
-            {
-                var user = await client.Users[mention.MentionText].GetAsync(cancellationToken: ct);
-                if (user != null)
-                {
-                    mention.Mentioned!.User!.Id = user.Id;
-                    mention.Mentioned.User.DisplayName = user.DisplayName;
-                    mention.MentionText = user.DisplayName;
-                }
-            }
-            catch { /* leave as-is if user lookup fails */ }
-        }
-    }
-
     private static Command BuildSend(Option<string> formatOption)
     {
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageOption = new Option<string>("--message") { Description = "Message text", Required = true };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Content type: text or html" };
-        var mentionsOption = new Option<string>("--mentions") { Description = "Comma-separated id:email pairs for @mentions, e.g. \"0:user@example.com,1:other@example.com\"" };
-        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption, mentionsOption };
+        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
             var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
-            var mentionsValue = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -391,27 +193,8 @@ public static class ChatCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                var chatMessage = new ChatMessage
-                {
-                    Body = new ItemBody
-                    {
-                        ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
-                        Content = message
-                    }
-                };
-
-                if (!string.IsNullOrEmpty(mentionsValue))
-                {
-                    var mentions = ParseMentions(mentionsValue);
-                    await ResolveMentionUserIds(client, mentions, ct);
-                    chatMessage.Mentions = mentions;
-                }
-
-                var sent = await client.Me.Chats[chatId].Messages.PostAsync(chatMessage, cancellationToken: ct);
-                ChatCacheService.Upsert(chatId, null, null);
-                OutputService.Print(new { status = "sent", id = sent?.Id, chatId });
+                var result = await ChatService.SendAsync(chatId, message, contentType);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -427,14 +210,12 @@ public static class ChatCommands
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to reply to" };
         var messageOption = new Option<string>("--message") { Description = "Reply text", Required = true };
-        var mentionsOption = new Option<string>("--mentions") { Description = "Comma-separated id:email pairs for @mentions, e.g. \"0:user@example.com,1:other@example.com\"" };
-        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption, mentionsOption };
+        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var messageId = parseResult.GetValue(messageIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
-            var mentionsValue = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -444,27 +225,8 @@ public static class ChatCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                var reply = new ChatMessage
-                {
-                    Body = new ItemBody
-                    {
-                        ContentType = BodyType.Text,
-                        Content = message
-                    }
-                };
-
-                if (!string.IsNullOrEmpty(mentionsValue))
-                {
-                    var mentions = ParseMentions(mentionsValue);
-                    await ResolveMentionUserIds(client, mentions, ct);
-                    reply.Mentions = mentions;
-                }
-
-                var sent = await client.Me.Chats[chatId].Messages[messageId].Replies.PostAsync(reply, cancellationToken: ct);
-                ChatCacheService.Upsert(chatId, null, null);
-                OutputService.Print(new { status = "replied", id = sent?.Id, chatId, messageId });
+                var result = await ChatService.ReplyAsync(chatId, messageId, message);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {

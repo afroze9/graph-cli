@@ -147,27 +147,23 @@ public class AuthService
 
         if (string.IsNullOrEmpty(envTenant) || string.IsNullOrEmpty(envClient))
         {
-            Console.Error.WriteLine("No configuration found. Please create ~/.graph-cli/config.json with:");
-            Console.Error.WriteLine("""
-            {
-              "tenantId": "<your-tenant-id>",
-              "clientId": "<your-client-id>"
-            }
-            """);
-            Console.Error.WriteLine("Or set GRAPH_CLI_TENANT_ID and GRAPH_CLI_CLIENT_ID environment variables.");
-            Environment.Exit(1);
+            throw new GraphCliConfigException(
+                "No configuration found. Please create ~/.graph-cli/config.json with:\n" +
+                "{\n  \"tenantId\": \"<your-tenant-id>\",\n  \"clientId\": \"<your-client-id>\"\n}\n" +
+                "Or set GRAPH_CLI_TENANT_ID and GRAPH_CLI_CLIENT_ID environment variables.");
         }
 
-        var newConfig = new GraphCliConfig
+        var envScopes = Environment.GetEnvironmentVariable("GRAPH_CLI_SCOPES");
+        var scopes = !string.IsNullOrEmpty(envScopes)
+            ? envScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : DefaultScopes;
+
+        return new GraphCliConfig
         {
             TenantId = envTenant!,
             ClientId = envClient!,
-            Scopes = DefaultScopes
+            Scopes = scopes
         };
-
-        Directory.CreateDirectory(ConfigDir);
-        File.WriteAllText(ConfigPath, JsonSerializer.Serialize(newConfig, new JsonSerializerOptions { WriteIndented = true }));
-        return newConfig;
     }
 }
 
@@ -186,3 +182,9 @@ public class AuthStatus
     public DateTimeOffset? ExpiresOn { get; set; }
     public string? Message { get; set; }
 }
+
+public class GraphCliConfigException : Exception
+{
+    public GraphCliConfigException(string message) : base(message) { }
+}
+

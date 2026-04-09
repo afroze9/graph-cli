@@ -1,7 +1,5 @@
 using System.CommandLine;
 using GraphCli.Services;
-using Microsoft.Graph;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace GraphCli.Commands;
@@ -37,36 +35,8 @@ public static class FilesCommands
             var top = parseResult.GetValue(topOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
-                var itemId = folder ?? "root";
-
-                var items = await client.Drives[resolvedDrive].Items[itemId].Children.GetAsync(r =>
-                {
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Select = ["id", "name", "size", "lastModifiedDateTime", "folder", "file", "webUrl"];
-                    r.QueryParameters.Orderby = ["name"];
-                }, ct);
-
-                var results = items?.Value?.Select(i => new
-                {
-                    i.Id,
-                    i.Name,
-                    Type = i.Folder != null ? "folder" : "file",
-                    i.Size,
-                    i.LastModifiedDateTime,
-                    ChildCount = i.Folder?.ChildCount,
-                    MimeType = i.File?.MimeType,
-                    i.WebUrl
-                }).ToList();
-
-                if (results != null)
-                {
-                    FileCacheService.UpsertMany(results.Select(r =>
-                        (r.Id!, r.Name!, r.Type, r.Size, r.MimeType, r.WebUrl)));
-                }
-
-                OutputService.Print(results, format);
+                var result = await FileService.ListAsync(folder, driveId, site, top);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -91,42 +61,8 @@ public static class FilesCommands
             var site = parseResult.GetValue(siteOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                DriveItem? driveItem;
-
-                if (IsSharingUrl(item))
-                {
-                    var encoded = EncodeSharingUrl(item);
-                    driveItem = await client.Shares[encoded].DriveItem.GetAsync(cancellationToken: ct);
-                }
-                else
-                {
-                    var resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
-                    driveItem = await client.Drives[resolvedDrive].Items[item].GetAsync(cancellationToken: ct);
-                }
-
-                if (driveItem == null)
-                {
-                    OutputService.PrintError("not_found", "Item not found.");
-                    Environment.ExitCode = 1;
-                    return;
-                }
-
-                OutputService.Print(new
-                {
-                    driveItem.Id,
-                    driveItem.Name,
-                    Type = driveItem.Folder != null ? "folder" : "file",
-                    driveItem.Size,
-                    driveItem.LastModifiedDateTime,
-                    driveItem.CreatedDateTime,
-                    ChildCount = driveItem.Folder?.ChildCount,
-                    MimeType = driveItem.File?.MimeType,
-                    driveItem.WebUrl,
-                    CreatedBy = driveItem.CreatedBy?.User?.DisplayName,
-                    LastModifiedBy = driveItem.LastModifiedBy?.User?.DisplayName,
-                    DriveId = driveItem.ParentReference?.DriveId
-                }, format);
+                var result = await FileService.GetAsync(item, driveId, site);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -152,71 +88,8 @@ public static class FilesCommands
             var site = parseResult.GetValue(siteOption);
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                string resolvedDrive;
-                string resolvedItemId;
-
-                if (IsSharingUrl(item))
-                {
-                    // Resolve the sharing URL to a drive item to get driveId + itemId
-                    var encoded = EncodeSharingUrl(item);
-                    var sharedItem = await client.Shares[encoded].DriveItem.GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "name", "size", "folder", "parentReference"];
-                    }, ct);
-
-                    if (sharedItem == null)
-                    {
-                        OutputService.PrintError("not_found", "Item not found.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    if (sharedItem.Folder != null)
-                    {
-                        OutputService.PrintError("invalid_operation", "Cannot download a folder. Use 'files list' to see its contents.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    resolvedDrive = sharedItem.ParentReference?.DriveId
-                        ?? throw new InvalidOperationException("Could not determine drive ID from sharing URL.");
-                    resolvedItemId = sharedItem.Id!;
-
-                    var filePath = outPath ?? Path.GetFileName(sharedItem.Name) ?? "download";
-                    var content = await client.Drives[resolvedDrive].Items[resolvedItemId].Content.GetAsync(cancellationToken: ct);
-                    await WriteStreamToFileAsync(content, filePath, sharedItem.Size, ct);
-                }
-                else
-                {
-                    resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
-                    resolvedItemId = item;
-
-                    // Get metadata to check if it's a folder and get the filename
-                    var driveItem = await client.Drives[resolvedDrive].Items[resolvedItemId].GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "name", "size", "folder"];
-                    }, ct);
-
-                    if (driveItem == null)
-                    {
-                        OutputService.PrintError("not_found", "Item not found.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    if (driveItem.Folder != null)
-                    {
-                        OutputService.PrintError("invalid_operation", "Cannot download a folder. Use 'files list' to see its contents.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    var filePath = outPath ?? Path.GetFileName(driveItem.Name) ?? "download";
-                    var content = await client.Drives[resolvedDrive].Items[resolvedItemId].Content.GetAsync(cancellationToken: ct);
-                    await WriteStreamToFileAsync(content, filePath, driveItem.Size, ct);
-                }
+                var result = await FileService.DownloadAsync(item, outPath, driveId, site);
+                OutputService.Print(result);
             }
             catch (ODataError ex)
             {
@@ -243,57 +116,10 @@ public static class FilesCommands
             var site = parseResult.GetValue(siteOption);
             var top = parseResult.GetValue(topOption);
             var refresh = parseResult.GetValue(refreshOption);
-
-            // Check cache first (only when no site/drive filters and not refreshing)
-            if (!refresh && string.IsNullOrEmpty(site) && string.IsNullOrEmpty(driveId))
-            {
-                var cached = FileCacheService.Search(query, top);
-                if (cached.Count > 0)
-                {
-                    var cachedResults = cached.Select(f => new
-                    {
-                        f.Id,
-                        f.Name,
-                        f.Type,
-                        f.Size,
-                        f.MimeType,
-                        f.WebUrl
-                    }).ToList();
-                    OutputService.Print(cachedResults, format);
-                    return;
-                }
-            }
-
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-                var resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
-
-                var results = await client.Drives[resolvedDrive].SearchWithQ(query).GetAsSearchWithQGetResponseAsync(r =>
-                {
-                    r.QueryParameters.Top = top;
-                    r.QueryParameters.Select = ["id", "name", "size", "lastModifiedDateTime", "webUrl", "parentReference", "file", "folder"];
-                }, ct);
-
-                var items = results?.Value?.Select(i => new
-                {
-                    i.Id,
-                    i.Name,
-                    Type = i.Folder != null ? "folder" : "file",
-                    i.Size,
-                    i.LastModifiedDateTime,
-                    MimeType = i.File?.MimeType,
-                    Path = i.ParentReference?.Path,
-                    i.WebUrl
-                }).ToList();
-
-                if (items != null)
-                {
-                    FileCacheService.UpsertMany(items.Select(i =>
-                        (i.Id!, i.Name!, i.Type, i.Size, i.MimeType, i.WebUrl)));
-                }
-
-                OutputService.Print(items, format);
+                var result = await FileService.SearchAsync(query, driveId, site, top, refresh);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -339,63 +165,8 @@ public static class FilesCommands
 
             try
             {
-                var client = await GraphClientProvider.CreateAsync();
-
-                string resolvedDrive;
-                string resolvedItemId;
-
-                if (IsSharingUrl(item))
-                {
-                    var encoded = EncodeSharingUrl(item);
-                    var sharedItem = await client.Shares[encoded].DriveItem.GetAsync(r =>
-                    {
-                        r.QueryParameters.Select = ["id", "name", "parentReference"];
-                    }, ct);
-
-                    if (sharedItem == null)
-                    {
-                        OutputService.PrintError("not_found", "Item not found.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    resolvedDrive = sharedItem.ParentReference?.DriveId
-                        ?? throw new InvalidOperationException("Could not determine drive ID from sharing URL.");
-                    resolvedItemId = sharedItem.Id!;
-                }
-                else
-                {
-                    resolvedDrive = await ResolveDriveIdAsync(client, site, driveId, ct);
-                    resolvedItemId = item;
-                }
-
-                var inviteRecipients = emails.Select(email => new DriveRecipient
-                {
-                    Email = email
-                }).ToList();
-
-                var invite = new Microsoft.Graph.Drives.Item.Items.Item.Invite.InvitePostRequestBody
-                {
-                    Recipients = inviteRecipients,
-                    Roles = [role],
-                    RequireSignIn = true,
-                    SendInvitation = false,
-                    Message = message
-                };
-
-                var permissions = await client.Drives[resolvedDrive].Items[resolvedItemId]
-                    .Invite.PostAsInvitePostResponseAsync(invite, cancellationToken: ct);
-
-                var results = permissions?.Value?.Select(p => new
-                {
-                    p.Id,
-                    Role = p.Roles?.FirstOrDefault(),
-                    Email = p.GrantedToV2?.User?.DisplayName
-                        ?? p.Invitation?.Email,
-                    Link = p.Link?.WebUrl
-                }).ToList();
-
-                OutputService.Print(new { status = "shared", item = resolvedItemId, permissions = results }, format);
+                var result = await FileService.ShareAsync(item, recipients, role, message, driveId, site);
+                OutputService.Print(result, format);
             }
             catch (ODataError ex)
             {
@@ -404,74 +175,5 @@ public static class FilesCommands
             }
         });
         return cmd;
-    }
-
-    /// <summary>
-    /// Resolves the drive ID from --site/--drive-id flags, or falls back to the user's OneDrive.
-    /// </summary>
-    private static async Task<string> ResolveDriveIdAsync(
-        GraphServiceClient client, string? site, string? driveId, CancellationToken ct)
-    {
-        if (!string.IsNullOrEmpty(driveId))
-            return driveId;
-
-        if (!string.IsNullOrEmpty(site))
-        {
-            var siteObj = await client.Sites[site].GetAsync(r =>
-            {
-                r.QueryParameters.Select = ["id"];
-            }, ct);
-
-            if (siteObj?.Id == null)
-                throw new InvalidOperationException($"Could not resolve site: {site}");
-
-            var drive = await client.Sites[siteObj.Id].Drive.GetAsync(r =>
-            {
-                r.QueryParameters.Select = ["id"];
-            }, ct);
-
-            return drive?.Id ?? throw new InvalidOperationException($"No default drive found for site: {site}");
-        }
-
-        // Default: current user's OneDrive
-        var myDrive = await client.Me.Drive.GetAsync(r =>
-        {
-            r.QueryParameters.Select = ["id"];
-        }, ct);
-
-        return myDrive?.Id ?? throw new InvalidOperationException("Could not resolve user's OneDrive.");
-    }
-
-    /// <summary>
-    /// Checks if the input looks like a sharing URL (http/https).
-    /// </summary>
-    private static bool IsSharingUrl(string value) =>
-        value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-        value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Encodes a sharing URL into the format expected by /shares/{encodedUrl}.
-    /// See: https://learn.microsoft.com/en-us/graph/api/shares-get
-    /// </summary>
-    private static string EncodeSharingUrl(string url)
-    {
-        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(url));
-        // Convert to base64url and prepend "u!"
-        var encoded = "u!" + base64.TrimEnd('=').Replace('/', '_').Replace('+', '-');
-        return encoded;
-    }
-
-    private static async Task WriteStreamToFileAsync(Stream? content, string filePath, long? size, CancellationToken ct)
-    {
-        if (content == null)
-        {
-            OutputService.PrintError("no_content", "File has no downloadable content.");
-            Environment.ExitCode = 1;
-            return;
-        }
-
-        await using var fileStream = File.Create(filePath);
-        await content.CopyToAsync(fileStream, ct);
-        OutputService.Print(new { status = "downloaded", file = filePath, size });
     }
 }
