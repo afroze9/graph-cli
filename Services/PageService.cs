@@ -522,28 +522,46 @@ public static class PageService
             { "4XX", ODataError.CreateFromDiscriminatorValue },
             { "5XX", ODataError.CreateFromDiscriminatorValue }
         };
-        var created = await client.RequestAdapter.SendAsync(requestInfo, HorizontalSection.CreateFromDiscriminatorValue, errorMapping);
 
-        return new
+        try
         {
-            status = "created",
-            id = created?.Id,
-            Layout = created?.Layout?.ToString(),
-            Emphasis = created?.Emphasis?.ToString(),
-            Columns = created?.Columns?.Select(c => new { c.Id, c.Width }).ToList()
-        };
+            var created = await client.RequestAdapter.SendAsync(requestInfo, HorizontalSection.CreateFromDiscriminatorValue, errorMapping);
+            return new
+            {
+                status = "created",
+                id = created?.Id,
+                Layout = created?.Layout?.ToString(),
+                Emphasis = created?.Emphasis?.ToString(),
+                Columns = created?.Columns?.Select(c => new { c.Id, c.Width }).ToList()
+            };
+        }
+        catch (ODataError ex) when (ex.Error?.Code == "invalidRequest")
+        {
+            throw new InvalidOperationException(
+                $"The Graph API rejected the section creation request. " +
+                $"This is a known limitation — the POST horizontalSections endpoint is unreliable. " +
+                $"Use 'pages update --canvas-json' to set up sections as part of the full canvas layout instead. " +
+                $"Example: graph-cli pages update <page-id> --site <site> --canvas-json '{{\"horizontalSections\":[{{\"id\":\"1\",\"layout\":\"{layout}\",\"columns\":[...]}},...]}}' " +
+                $"Then use 'pages webparts create' to add content to individual columns. " +
+                $"Run 'pages sections layouts' to see column configurations for each layout type.");
+        }
     }
 
     // Section layout helper methods
 
     public static object ListSectionLayouts()
     {
-        return SectionLayoutHelper.All().Select(l => new
+        return new
         {
-            l.Name,
-            l.Description,
-            Columns = l.Columns.Select(c => new { c.Id, c.Width }).ToList()
-        }).ToList();
+            note = "Set sections via 'pages update --canvas-json' with the full canvas layout. Then use 'pages webparts create' to add content to columns. Granular 'sections create' via the Graph API is unreliable.",
+            emphasisValues = new[] { "none", "netural", "soft", "strong" },
+            layouts = SectionLayoutHelper.All().Select(l => new
+            {
+                l.Name,
+                l.Description,
+                Columns = l.Columns.Select(c => new { c.Id, c.Width }).ToList()
+            }).ToList()
+        };
     }
 
     public static object ListWebPartTypes()
@@ -562,6 +580,17 @@ public static class PageService
     public static async Task<object> UpdateSectionAsync(
         string site, string pageId, string sectionId, string? layout, string? emphasis)
     {
+        if (layout != null)
+        {
+            var layoutError = SectionLayoutHelper.ValidateLayout(layout);
+            if (layoutError != null) throw new InvalidOperationException(layoutError);
+        }
+        if (emphasis != null)
+        {
+            var emphasisError = SectionLayoutHelper.ValidateEmphasis(emphasis);
+            if (emphasisError != null) throw new InvalidOperationException(emphasisError);
+        }
+
         var client = await GraphClientProvider.CreateAsync();
         var siteId = await ResolveSiteIdAsync(client, site);
 
@@ -569,10 +598,18 @@ public static class PageService
         if (layout != null) section.Layout = Enum.Parse<HorizontalSectionLayoutType>(layout, ignoreCase: true);
         if (emphasis != null) section.Emphasis = Enum.Parse<SectionEmphasisType>(emphasis, ignoreCase: true);
 
-        var updated = await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
-            .HorizontalSections[sectionId].PatchAsync(section);
-
-        return new { status = "updated", id = updated?.Id ?? sectionId };
+        try
+        {
+            var updated = await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
+                .HorizontalSections[sectionId].PatchAsync(section);
+            return new { status = "updated", id = updated?.Id ?? sectionId };
+        }
+        catch (ODataError ex) when (ex.Error?.Code == "invalidRequest")
+        {
+            throw new InvalidOperationException(
+                $"The Graph API rejected the section update. " +
+                $"Granular section PATCH may not be supported — use 'pages update --canvas-json' to replace the full canvas layout instead.");
+        }
     }
 
     public static async Task<object> DeleteSectionAsync(string site, string pageId, string sectionId)
@@ -580,10 +617,18 @@ public static class PageService
         var client = await GraphClientProvider.CreateAsync();
         var siteId = await ResolveSiteIdAsync(client, site);
 
-        await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
-            .HorizontalSections[sectionId].DeleteAsync();
-
-        return new { status = "deleted", id = sectionId };
+        try
+        {
+            await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
+                .HorizontalSections[sectionId].DeleteAsync();
+            return new { status = "deleted", id = sectionId };
+        }
+        catch (ODataError ex) when (ex.Error?.Code == "invalidRequest")
+        {
+            throw new InvalidOperationException(
+                $"The Graph API rejected the section delete. " +
+                $"Use 'pages update --canvas-json' to replace the full canvas layout (omitting the section to remove) instead.");
+        }
     }
 
     // ── Columns ──────────────────────────────────────────────────────
