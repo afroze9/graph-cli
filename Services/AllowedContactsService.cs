@@ -36,8 +36,13 @@ public class AllowedContactsService
     /// If not found or not allowed, prompts the user interactively.
     /// Returns true if the action is allowed, false if denied.
     /// </summary>
+    public static bool IsBypassed =>
+        string.Equals(Environment.GetEnvironmentVariable("GRAPH_CLI_SKIP_ALLOWLIST"), "true", StringComparison.OrdinalIgnoreCase);
+
     public static bool CheckAndPrompt(string identifier, string action, bool interactive = true)
     {
+        if (IsBypassed) return true;
+
         var list = Load();
         var contact = list.FindContact(identifier);
 

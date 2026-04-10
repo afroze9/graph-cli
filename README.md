@@ -344,6 +344,7 @@ McpTools/           ← MCP layer (JSON serialization, tool registration)
 | `GRAPH_CLI_TENANT_ID` | Azure AD tenant ID (alternative to config.json) |
 | `GRAPH_CLI_CLIENT_ID` | Azure AD client/application ID (alternative to config.json) |
 | `GRAPH_CLI_SCOPES` | Comma-separated Microsoft Graph scopes (default: all required scopes) |
+| `GRAPH_CLI_SKIP_ALLOWLIST` | Set to `true` to bypass the allowed contacts check for outbound actions (send email, chat, share) |
 
 ## License
 
