@@ -18,7 +18,7 @@ public class AuthService
         "Chat.Create", "Chat.ReadWrite", "ChatMessage.Read", "ChatMessage.Send",
         "Presence.Read.All",
         "Tasks.ReadWrite",
-        "Files.Read.All", "Sites.Read.All"
+        "Files.Read.All", "Sites.ReadWrite.All"
     ];
 
     private IPublicClientApplication? _pca;

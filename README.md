@@ -34,7 +34,7 @@ dotnet tool install -g graph-cli --add-source ./nupkg
    - `Chat.Create`, `Chat.ReadWrite`, `ChatMessage.Read`, `ChatMessage.Send`
    - `Presence.Read.All`
    - `Tasks.ReadWrite`
-   - `Files.Read.All`, `Sites.Read.All` (or `Sites.ReadWrite.All` for page create/update/publish)
+   - `Files.Read.All`, `Sites.ReadWrite.All` (or `Sites.ReadWrite.All` for page create/update/publish)
 5. Click **Grant admin consent** (or ask your tenant admin to do this)
 
 ### 2. Configure graph-cli
@@ -84,7 +84,7 @@ Edit your Claude Desktop config file:
       "env": {
         "GRAPH_CLI_TENANT_ID": "<your-tenant-id>",
         "GRAPH_CLI_CLIENT_ID": "<your-client-id>",
-        "GRAPH_CLI_SCOPES": "User.Read,User.ReadBasic.All,Mail.ReadWrite,Mail.Send,Calendars.Read.Shared,Calendars.ReadWrite,Chat.Create,Chat.ReadWrite,ChatMessage.Read,ChatMessage.Send,Presence.Read.All,Tasks.ReadWrite,Files.Read.All,Sites.Read.All"
+        "GRAPH_CLI_SCOPES": "User.Read,User.ReadBasic.All,Mail.ReadWrite,Mail.Send,Calendars.Read.Shared,Calendars.ReadWrite,Chat.Create,Chat.ReadWrite,ChatMessage.Read,ChatMessage.Send,Presence.Read.All,Tasks.ReadWrite,Files.Read.All,Sites.ReadWrite.All"
       }
     }
   }
