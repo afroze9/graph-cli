@@ -219,19 +219,21 @@ public static class PagesTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "pages_webparts_create"), Description("Add a webpart to a column on a SharePoint page")]
+    [McpServerTool(Name = "pages_webparts_create"), Description("Add a webpart to a column on a SharePoint page. Use pages_webparts_types to see available types and their parameters.")]
     public static async Task<string> WebPartsCreate(
         [Description("SharePoint site ID or hostname")] string site,
         [Description("Page ID")] string pageId,
         [Description("Section ID")] string sectionId,
         [Description("Column ID")] string columnId,
         [Description("HTML content (creates a TextWebPart)")] string? innerHtml = null,
-        [Description("Standard webpart type GUID (creates a StandardWebPart)")] string? webPartType = null,
-        [Description("JSON data for standard webpart configuration")] string? dataJson = null)
+        [Description("Webpart type name (e.g. youtube, button, divider) or GUID")] string? webPartType = null,
+        [Description("Raw JSON data (overrides params for advanced use)")] string? dataJson = null,
+        [Description("Parameters as JSON object e.g. {\"videoId\":\"abc123\"} — see pages_webparts_types for required params per type")] string? paramsJson = null)
     {
         try
         {
-            var result = await PageService.CreateWebPartAsync(site, pageId, sectionId, columnId, innerHtml, webPartType, dataJson);
+            var parameters = ParseParamsJson(paramsJson);
+            var result = await PageService.CreateWebPartAsync(site, pageId, sectionId, columnId, innerHtml, webPartType, dataJson, parameters);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
@@ -246,11 +248,14 @@ public static class PagesTools
         [Description("Column ID")] string columnId,
         [Description("WebPart ID")] string webpartId,
         [Description("New HTML content (for TextWebPart)")] string? innerHtml = null,
-        [Description("New JSON data (for StandardWebPart)")] string? dataJson = null)
+        [Description("Webpart type name or GUID")] string? webPartType = null,
+        [Description("Raw JSON data")] string? dataJson = null,
+        [Description("Parameters as JSON object")] string? paramsJson = null)
     {
         try
         {
-            var result = await PageService.UpdateWebPartAsync(site, pageId, sectionId, columnId, webpartId, innerHtml, dataJson);
+            var parameters = ParseParamsJson(paramsJson);
+            var result = await PageService.UpdateWebPartAsync(site, pageId, sectionId, columnId, webpartId, innerHtml, webPartType, dataJson, parameters);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
@@ -272,5 +277,27 @@ public static class PagesTools
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
+    // ── Discovery ────────────────────────────────────────────────────
+
+    [McpServerTool(Name = "pages_webparts_types"), Description("List all supported webpart types with their names, GUIDs, and required/optional parameters")]
+    public static Task<string> WebPartsTypes()
+    {
+        return Task.FromResult(McpGraphHelper.ToJson(PageService.ListWebPartTypes()));
+    }
+
+    [McpServerTool(Name = "pages_sections_layouts"), Description("List all valid section layouts with their column configurations")]
+    public static Task<string> SectionsLayouts()
+    {
+        return Task.FromResult(McpGraphHelper.ToJson(PageService.ListSectionLayouts()));
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private static Dictionary<string, string>? ParseParamsJson(string? paramsJson)
+    {
+        if (string.IsNullOrEmpty(paramsJson)) return null;
+        return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(paramsJson);
     }
 }

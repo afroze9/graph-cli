@@ -233,7 +233,15 @@ public static class PageService
         else if (!string.IsNullOrEmpty(content))
             sitePage.CanvasLayout = BuildSingleSectionLayout(content);
 
-        var updated = await client.Sites[siteId].Pages[pageId].PatchAsync(sitePage);
+        // The update API requires the /microsoft.graph.sitePage cast in the URL
+        var requestInfo = client.Sites[siteId].Pages[pageId].ToPatchRequestInformation(sitePage);
+        requestInfo.URI = new Uri($"https://graph.microsoft.com/v1.0/sites/{siteId}/pages/{pageId}/microsoft.graph.sitePage");
+        var errorMapping = new Dictionary<string, Microsoft.Kiota.Abstractions.Serialization.ParsableFactory<Microsoft.Kiota.Abstractions.Serialization.IParsable>>
+        {
+            { "4XX", ODataError.CreateFromDiscriminatorValue },
+            { "5XX", ODataError.CreateFromDiscriminatorValue }
+        };
+        var updated = await client.RequestAdapter.SendAsync(requestInfo, BaseSitePage.CreateFromDiscriminatorValue, errorMapping);
 
         var published = false;
         if (publish)
@@ -284,12 +292,13 @@ public static class PageService
                         new HorizontalSectionColumn
                         {
                             Id = "1",
-                            Width = 12,
+                            Width = 0,
                             Webparts =
                             [
                                 new TextWebPart
                                 {
                                     OdataType = "#microsoft.graph.textWebPart",
+                                    Id = Guid.NewGuid().ToString(),
                                     InnerHtml = htmlContent
                                 }
                             ]
@@ -356,7 +365,7 @@ public static class PageService
             var wp = new StandardWebPart
             {
                 OdataType = "#microsoft.graph.standardWebPart",
-                Id = el.TryGetProperty("id", out var idEl) ? idEl.GetString() : null,
+                Id = el.TryGetProperty("id", out var idEl) ? idEl.GetString() : Guid.NewGuid().ToString(),
                 WebPartType = el.TryGetProperty("webPartType", out var typeEl) ? typeEl.GetString() : null
             };
 
@@ -373,7 +382,7 @@ public static class PageService
             var wp = new TextWebPart
             {
                 OdataType = "#microsoft.graph.textWebPart",
-                Id = el.TryGetProperty("id", out var idEl) ? idEl.GetString() : null,
+                Id = el.TryGetProperty("id", out var idEl) ? idEl.GetString() : Guid.NewGuid().ToString(),
                 InnerHtml = el.TryGetProperty("innerHtml", out var htmlEl) ? htmlEl.GetString() : null
             };
             return wp;
@@ -480,24 +489,74 @@ public static class PageService
         var client = await GraphClientProvider.CreateAsync();
         var siteId = await ResolveSiteIdAsync(client, site);
 
-        var section = new HorizontalSection
-        {
-            Layout = Enum.Parse<HorizontalSectionLayoutType>(layout, ignoreCase: true),
-            Emphasis = !string.IsNullOrEmpty(emphasis)
-                ? Enum.Parse<SectionEmphasisType>(emphasis, ignoreCase: true)
-                : SectionEmphasisType.None
-        };
+        // Validate via helper
+        var layoutError = SectionLayoutHelper.ValidateLayout(layout);
+        if (layoutError != null) throw new InvalidOperationException(layoutError);
 
-        var created = await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
-            .HorizontalSections.PostAsync(section);
+        if (!string.IsNullOrEmpty(emphasis))
+        {
+            var emphasisError = SectionLayoutHelper.ValidateEmphasis(emphasis);
+            if (emphasisError != null) throw new InvalidOperationException(emphasisError);
+        }
+
+        var columns = SectionLayoutHelper.GetColumns(layout)!;
+
+        // Build raw JSON matching the API spec exactly
+        var columnJsonArray = columns.Select(c =>
+            $"{{\"id\":\"{c.Id}\",\"width\":{c.Width}}}");
+        var body = $"{{\"layout\":\"{layout}\",\"columns\":[{string.Join(",", columnJsonArray)}]";
+        if (!string.IsNullOrEmpty(emphasis))
+            body += $",\"emphasis\":\"{emphasis}\"";
+        body += "}";
+
+        var requestInfo = new Microsoft.Kiota.Abstractions.RequestInformation
+        {
+            HttpMethod = Microsoft.Kiota.Abstractions.Method.POST,
+            URI = new Uri($"https://graph.microsoft.com/v1.0/sites/{siteId}/pages/{pageId}/microsoft.graph.sitePage/canvasLayout/horizontalSections")
+        };
+        requestInfo.Headers.Add("Content-Type", "application/json");
+        requestInfo.SetStreamContent(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(body)), "application/json");
+
+        var errorMapping = new Dictionary<string, Microsoft.Kiota.Abstractions.Serialization.ParsableFactory<Microsoft.Kiota.Abstractions.Serialization.IParsable>>
+        {
+            { "4XX", ODataError.CreateFromDiscriminatorValue },
+            { "5XX", ODataError.CreateFromDiscriminatorValue }
+        };
+        var created = await client.RequestAdapter.SendAsync(requestInfo, HorizontalSection.CreateFromDiscriminatorValue, errorMapping);
 
         return new
         {
             status = "created",
             id = created?.Id,
             Layout = created?.Layout?.ToString(),
-            Emphasis = created?.Emphasis?.ToString()
+            Emphasis = created?.Emphasis?.ToString(),
+            Columns = created?.Columns?.Select(c => new { c.Id, c.Width }).ToList()
         };
+    }
+
+    // Section layout helper methods
+
+    public static object ListSectionLayouts()
+    {
+        return SectionLayoutHelper.All().Select(l => new
+        {
+            l.Name,
+            l.Description,
+            Columns = l.Columns.Select(c => new { c.Id, c.Width }).ToList()
+        }).ToList();
+    }
+
+    public static object ListWebPartTypes()
+    {
+        return WebPartRegistry.All().Select(t => new
+        {
+            t.Name,
+            t.Guid,
+            t.Description,
+            t.RequiredParams,
+            t.OptionalParams,
+            t.IsPassthrough
+        }).ToList();
     }
 
     public static async Task<object> UpdateSectionAsync(
@@ -573,6 +632,22 @@ public static class PageService
         return webparts.Select(FormatWebPart).ToList();
     }
 
+    public static async Task<object> GetWebPartRawAsync(string site, string pageId, string webpartId)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var siteId = await ResolveSiteIdAsync(client, site);
+
+        var requestInfo = new Microsoft.Kiota.Abstractions.RequestInformation
+        {
+            HttpMethod = Microsoft.Kiota.Abstractions.Method.GET,
+            URI = new Uri($"https://graph.microsoft.com/v1.0/sites/{siteId}/pages/{pageId}/microsoft.graph.sitePage/webParts/{webpartId}")
+        };
+        using var response = await client.RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo);
+        using var reader = new StreamReader(response!);
+        var json = await reader.ReadToEndAsync();
+        return JsonSerializer.Deserialize<JsonElement>(json);
+    }
+
     public static async Task<object> GetWebPartAsync(
         string site, string pageId, string sectionId, string columnId, string webpartId)
     {
@@ -587,7 +662,7 @@ public static class PageService
 
     public static async Task<object> CreateWebPartAsync(
         string site, string pageId, string sectionId, string columnId,
-        string? innerHtml, string? webPartType, string? dataJson)
+        string? innerHtml, string? webPartType, string? dataJson, Dictionary<string, string>? parameters = null)
     {
         var client = await GraphClientProvider.CreateAsync();
         var siteId = await ResolveSiteIdAsync(client, site);
@@ -603,18 +678,7 @@ public static class PageService
         }
         else if (!string.IsNullOrEmpty(webPartType))
         {
-            var wp = new StandardWebPart
-            {
-                OdataType = "#microsoft.graph.standardWebPart",
-                WebPartType = webPartType
-            };
-            if (!string.IsNullOrEmpty(dataJson))
-            {
-                wp.Data = new WebPartData();
-                using var doc = JsonDocument.Parse(dataJson);
-                wp.Data.AdditionalData = JsonToAdditionalData(doc.RootElement);
-            }
-            webpart = wp;
+            webpart = BuildStandardWebPart(webPartType, dataJson, parameters);
         }
         else
         {
@@ -629,7 +693,7 @@ public static class PageService
 
     public static async Task<object> UpdateWebPartAsync(
         string site, string pageId, string sectionId, string columnId, string webpartId,
-        string? innerHtml, string? dataJson)
+        string? innerHtml, string? webPartType, string? dataJson, Dictionary<string, string>? parameters = null)
     {
         var client = await GraphClientProvider.CreateAsync();
         var siteId = await ResolveSiteIdAsync(client, site);
@@ -643,20 +707,13 @@ public static class PageService
                 InnerHtml = innerHtml
             };
         }
-        else if (!string.IsNullOrEmpty(dataJson))
+        else if (!string.IsNullOrEmpty(webPartType) || !string.IsNullOrEmpty(dataJson))
         {
-            var wp = new StandardWebPart
-            {
-                OdataType = "#microsoft.graph.standardWebPart"
-            };
-            wp.Data = new WebPartData();
-            using var doc = JsonDocument.Parse(dataJson);
-            wp.Data.AdditionalData = JsonToAdditionalData(doc.RootElement);
-            webpart = wp;
+            webpart = BuildStandardWebPart(webPartType, dataJson, parameters);
         }
         else
         {
-            throw new InvalidOperationException("Either --inner-html or --data-json must be provided.");
+            throw new InvalidOperationException("Either --inner-html, --webpart-type, or --data-json must be provided.");
         }
 
         var updated = await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
@@ -677,15 +734,68 @@ public static class PageService
         return new { status = "deleted", id = webpartId };
     }
 
+    private static StandardWebPart BuildStandardWebPart(
+        string? webPartType, string? dataJson, Dictionary<string, string>? parameters)
+    {
+        var resolvedType = webPartType;
+        WebPartData? data = null;
+
+        // Try registry for friendly name resolution and data building
+        if (!string.IsNullOrEmpty(webPartType))
+        {
+            var info = WebPartRegistry.Resolve(webPartType);
+            if (info != null)
+            {
+                resolvedType = info.Guid;
+                if (!string.IsNullOrEmpty(dataJson))
+                {
+                    // Explicit data-json overrides builder (escape hatch)
+                    data = new WebPartData();
+                    using var doc = JsonDocument.Parse(dataJson);
+                    data.AdditionalData = JsonToAdditionalData(doc.RootElement);
+                }
+                else
+                {
+                    // Use registry builder
+                    data = WebPartRegistry.BuildData(webPartType, parameters ?? []);
+                }
+            }
+        }
+
+        // Unknown type — fall back to raw dataJson
+        if (data == null && !string.IsNullOrEmpty(dataJson))
+        {
+            data = new WebPartData();
+            using var doc = JsonDocument.Parse(dataJson);
+            data.AdditionalData = JsonToAdditionalData(doc.RootElement);
+        }
+
+        return new StandardWebPart
+        {
+            OdataType = "#microsoft.graph.standardWebPart",
+            WebPartType = resolvedType,
+            Data = data
+        };
+    }
+
     private static object FormatWebPart(WebPart wp)
     {
+        var std = wp as StandardWebPart;
         return new
         {
             wp.Id,
             ODataType = wp.OdataType,
             InnerHtml = (wp as TextWebPart)?.InnerHtml,
-            WebPartType = (wp as StandardWebPart)?.WebPartType,
-            Data = (wp as StandardWebPart)?.Data?.AdditionalData
+            WebPartType = std?.WebPartType,
+            Data = std?.Data != null ? new
+            {
+                std.Data.DataVersion,
+                std.Data.Title,
+                std.Data.Description,
+                std.Data.Properties,
+                std.Data.ServerProcessedContent,
+                std.Data.AdditionalData
+            } : null
         };
     }
 

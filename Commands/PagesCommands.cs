@@ -110,8 +110,9 @@ public static class PagesCommands
         var siteOption = new Option<string>("--site") { Description = "SharePoint site ID or hostname", Required = true };
         var titleOption = new Option<string?>("--title") { Description = "New page title" };
         var contentOption = new Option<string?>("--content") { Description = "HTML content to replace page body (single-section)" };
+        var canvasJsonOption = new Option<string?>("--canvas-json") { Description = "Full canvas layout JSON for multi-section pages (overrides --content)" };
         var publishOption = new Option<bool>("--publish") { Description = "Publish the page after updating" };
-        var cmd = new Command("update", "Update an existing SharePoint page") { pageArg, siteOption, titleOption, contentOption, publishOption };
+        var cmd = new Command("update", "Update an existing SharePoint page") { pageArg, siteOption, titleOption, contentOption, canvasJsonOption, publishOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
@@ -119,10 +120,11 @@ public static class PagesCommands
             var site = parseResult.GetValue(siteOption)!;
             var title = parseResult.GetValue(titleOption);
             var content = parseResult.GetValue(contentOption);
+            var canvasJson = parseResult.GetValue(canvasJsonOption);
             var publish = parseResult.GetValue(publishOption);
             try
             {
-                var result = await PageService.UpdateAsync(site, pageId, title, content, canvasLayoutJson: null, publish);
+                var result = await PageService.UpdateAsync(site, pageId, title, content, canvasJson, publish);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex)
@@ -195,8 +197,8 @@ public static class PagesCommands
         });
 
         // create
-        var layoutOption = new Option<string>("--layout") { Description = "Section layout: fullWidth, oneColumn, twoColumn, threeColumn, oneThirdLeftColumn, oneThirdRightColumn", Required = true };
-        var emphasisOption = new Option<string?>("--emphasis") { Description = "Section emphasis: none, neutral, soft, strong" };
+        var layoutOption = new Option<string>("--layout") { Description = "Section layout (use 'sections layouts' to see all options)", Required = true };
+        var emphasisOption = new Option<string?>("--emphasis") { Description = "Section emphasis: none, netural, soft, strong" };
         var createCmd = new Command("create", "Add a new section to a page") { siteOption, pageIdOption, layoutOption, emphasisOption };
         createCmd.SetAction(async (parseResult, ct) =>
         {
@@ -207,6 +209,7 @@ public static class PagesCommands
                 OutputService.Print(result, format);
             }
             catch (ODataError ex) { OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message); Environment.ExitCode = 1; }
+            catch (InvalidOperationException ex) { OutputService.PrintError("validation", ex.Message); Environment.ExitCode = 1; }
         });
 
         // update
@@ -237,11 +240,20 @@ public static class PagesCommands
             catch (ODataError ex) { OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message); Environment.ExitCode = 1; }
         });
 
+        // layouts
+        var layoutsCmd = new Command("layouts", "List all valid section layouts with column configurations");
+        layoutsCmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            OutputService.Print(PageService.ListSectionLayouts(), format);
+        });
+
         group.Subcommands.Add(listCmd);
         group.Subcommands.Add(getCmd);
         group.Subcommands.Add(createCmd);
         group.Subcommands.Add(updateCmd);
         group.Subcommands.Add(deleteCmd);
+        group.Subcommands.Add(layoutsCmd);
         return group;
     }
 
@@ -313,33 +325,40 @@ public static class PagesCommands
 
         // create
         var innerHtmlOption = new Option<string?>("--inner-html") { Description = "HTML content (creates a TextWebPart)" };
-        var webPartTypeOption = new Option<string?>("--webpart-type") { Description = "Standard webpart type GUID (creates a StandardWebPart)" };
-        var dataJsonOption = new Option<string?>("--data-json") { Description = "JSON data for standard webpart configuration" };
-        var createCmd = new Command("create", "Add a webpart to a column") { siteOption, pageIdOption, sectionIdReqOption, columnIdReqOption, innerHtmlOption, webPartTypeOption, dataJsonOption };
+        var webPartTypeOption = new Option<string?>("--webpart-type") { Description = "Webpart type name (e.g. youtube, button, divider) or GUID" };
+        var dataJsonOption = new Option<string?>("--data-json") { Description = "Raw JSON data (overrides --params for advanced use)" };
+        var paramsOption = new Option<string?>("--params") { Description = "Parameters as key=value,key=value (e.g. videoId=abc123)" };
+        var createCmd = new Command("create", "Add a webpart to a column") { siteOption, pageIdOption, sectionIdReqOption, columnIdReqOption, innerHtmlOption, webPartTypeOption, dataJsonOption, paramsOption };
         createCmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var result = await PageService.CreateWebPartAsync(parseResult.GetValue(siteOption)!, parseResult.GetValue(pageIdOption)!, parseResult.GetValue(sectionIdReqOption)!, parseResult.GetValue(columnIdReqOption)!, parseResult.GetValue(innerHtmlOption), parseResult.GetValue(webPartTypeOption), parseResult.GetValue(dataJsonOption));
+                var paramDict = ParseParams(parseResult.GetValue(paramsOption));
+                var result = await PageService.CreateWebPartAsync(parseResult.GetValue(siteOption)!, parseResult.GetValue(pageIdOption)!, parseResult.GetValue(sectionIdReqOption)!, parseResult.GetValue(columnIdReqOption)!, parseResult.GetValue(innerHtmlOption), parseResult.GetValue(webPartTypeOption), parseResult.GetValue(dataJsonOption), paramDict);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex) { OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message); Environment.ExitCode = 1; }
+            catch (InvalidOperationException ex) { OutputService.PrintError("validation", ex.Message); Environment.ExitCode = 1; }
         });
 
         // update
         var updateInnerHtmlOption = new Option<string?>("--inner-html") { Description = "New HTML content" };
-        var updateDataJsonOption = new Option<string?>("--data-json") { Description = "New JSON data for standard webpart" };
-        var updateCmd = new Command("update", "Update a webpart") { webpartArg, siteOption, pageIdOption, sectionIdReqOption, columnIdReqOption, updateInnerHtmlOption, updateDataJsonOption };
+        var updateWebPartTypeOption = new Option<string?>("--webpart-type") { Description = "Webpart type name or GUID" };
+        var updateDataJsonOption = new Option<string?>("--data-json") { Description = "Raw JSON data" };
+        var updateParamsOption = new Option<string?>("--params") { Description = "Parameters as key=value,key=value" };
+        var updateCmd = new Command("update", "Update a webpart") { webpartArg, siteOption, pageIdOption, sectionIdReqOption, columnIdReqOption, updateInnerHtmlOption, updateWebPartTypeOption, updateDataJsonOption, updateParamsOption };
         updateCmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             try
             {
-                var result = await PageService.UpdateWebPartAsync(parseResult.GetValue(siteOption)!, parseResult.GetValue(pageIdOption)!, parseResult.GetValue(sectionIdReqOption)!, parseResult.GetValue(columnIdReqOption)!, parseResult.GetValue(webpartArg)!, parseResult.GetValue(updateInnerHtmlOption), parseResult.GetValue(updateDataJsonOption));
+                var paramDict = ParseParams(parseResult.GetValue(updateParamsOption));
+                var result = await PageService.UpdateWebPartAsync(parseResult.GetValue(siteOption)!, parseResult.GetValue(pageIdOption)!, parseResult.GetValue(sectionIdReqOption)!, parseResult.GetValue(columnIdReqOption)!, parseResult.GetValue(webpartArg)!, parseResult.GetValue(updateInnerHtmlOption), parseResult.GetValue(updateWebPartTypeOption), parseResult.GetValue(updateDataJsonOption), paramDict);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex) { OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message); Environment.ExitCode = 1; }
+            catch (InvalidOperationException ex) { OutputService.PrintError("validation", ex.Message); Environment.ExitCode = 1; }
         });
 
         // delete
@@ -355,11 +374,43 @@ public static class PagesCommands
             catch (ODataError ex) { OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message); Environment.ExitCode = 1; }
         });
 
+        // types
+        var typesCmd = new Command("types", "List all supported webpart types with parameters");
+        typesCmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            OutputService.Print(PageService.ListWebPartTypes(), format);
+        });
+
+        // raw (debug - get raw JSON for a webpart by page-level ID)
+        var rawWpArg = new Argument<string>("webpart-id") { Description = "WebPart ID" };
+        var rawCmd = new Command("raw", "Get raw webpart JSON (debug)") { rawWpArg, siteOption, pageIdOption };
+        rawCmd.SetAction(async (parseResult, ct) =>
+        {
+            try
+            {
+                var result = await PageService.GetWebPartRawAsync(parseResult.GetValue(siteOption)!, parseResult.GetValue(pageIdOption)!, parseResult.GetValue(rawWpArg)!);
+                OutputService.Print(result);
+            }
+            catch (Exception ex) { OutputService.PrintError("error", ex.Message); Environment.ExitCode = 1; }
+        });
+
         group.Subcommands.Add(listCmd);
         group.Subcommands.Add(getCmd);
         group.Subcommands.Add(createCmd);
         group.Subcommands.Add(updateCmd);
         group.Subcommands.Add(deleteCmd);
+        group.Subcommands.Add(typesCmd);
+        group.Subcommands.Add(rawCmd);
         return group;
+    }
+
+    private static Dictionary<string, string>? ParseParams(string? paramsStr)
+    {
+        if (string.IsNullOrEmpty(paramsStr)) return null;
+        return paramsStr.Split(',')
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
     }
 }
