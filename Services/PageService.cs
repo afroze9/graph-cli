@@ -501,10 +501,17 @@ public static class PageService
 
         var columns = SectionLayoutHelper.GetColumns(layout)!;
 
-        // Build raw JSON matching the API spec exactly
+        // Determine section ID by counting existing sections
+        var existing = await client.Sites[siteId].Pages[pageId].GraphSitePage.CanvasLayout
+            .HorizontalSections.GetAsync();
+        var nextId = (existing?.Value?.Count ?? 0) + 1;
+
+        // Build raw JSON matching the API docs example exactly:
+        // - "id" required at top level (section position)
+        // - "webparts" array required in each column (can be empty)
         var columnJsonArray = columns.Select(c =>
-            $"{{\"id\":\"{c.Id}\",\"width\":{c.Width}}}");
-        var body = $"{{\"layout\":\"{layout}\",\"columns\":[{string.Join(",", columnJsonArray)}]";
+            $"{{\"id\":\"{c.Id}\",\"width\":{c.Width},\"webparts\":[]}}");
+        var body = $"{{\"id\":\"{nextId}\",\"layout\":\"{layout}\",\"columns\":[{string.Join(",", columnJsonArray)}]";
         if (!string.IsNullOrEmpty(emphasis))
             body += $",\"emphasis\":\"{emphasis}\"";
         body += "}";
@@ -523,28 +530,15 @@ public static class PageService
             { "5XX", ODataError.CreateFromDiscriminatorValue }
         };
 
-        try
+        var created = await client.RequestAdapter.SendAsync(requestInfo, HorizontalSection.CreateFromDiscriminatorValue, errorMapping);
+        return new
         {
-            var created = await client.RequestAdapter.SendAsync(requestInfo, HorizontalSection.CreateFromDiscriminatorValue, errorMapping);
-            return new
-            {
-                status = "created",
-                id = created?.Id,
-                Layout = created?.Layout?.ToString(),
-                Emphasis = created?.Emphasis?.ToString(),
-                Columns = created?.Columns?.Select(c => new { c.Id, c.Width }).ToList()
-            };
-        }
-        catch (ODataError ex) when (ex.Error?.Code == "invalidRequest")
-        {
-            throw new InvalidOperationException(
-                $"The Graph API rejected the section creation request. " +
-                $"This is a known limitation — the POST horizontalSections endpoint is unreliable. " +
-                $"Use 'pages update --canvas-json' to set up sections as part of the full canvas layout instead. " +
-                $"Example: graph-cli pages update <page-id> --site <site> --canvas-json '{{\"horizontalSections\":[{{\"id\":\"1\",\"layout\":\"{layout}\",\"columns\":[...]}},...]}}' " +
-                $"Then use 'pages webparts create' to add content to individual columns. " +
-                $"Run 'pages sections layouts' to see column configurations for each layout type.");
-        }
+            status = "created",
+            id = created?.Id,
+            Layout = created?.Layout?.ToString(),
+            Emphasis = created?.Emphasis?.ToString(),
+            Columns = created?.Columns?.Select(c => new { c.Id, c.Width }).ToList()
+        };
     }
 
     // Section layout helper methods
@@ -553,7 +547,7 @@ public static class PageService
     {
         return new
         {
-            note = "Set sections via 'pages update --canvas-json' with the full canvas layout. Then use 'pages webparts create' to add content to columns. Granular 'sections create' via the Graph API is unreliable.",
+            note = "Use 'pages sections create' to add sections incrementally, or 'pages update --canvas-json' to set the full layout at once. Then use 'pages webparts create' to add content to columns.",
             emphasisValues = new[] { "none", "netural", "soft", "strong" },
             layouts = SectionLayoutHelper.All().Select(l => new
             {
