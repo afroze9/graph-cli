@@ -10,10 +10,10 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>graph-cli</ToolCommandName>
     <PackageId>graph-cli</PackageId>
-    <Version>2.0.1</Version>
+    <Version>2.1.0</Version>
     <PackageIcon>icon.png</PackageIcon>
     <Authors>Afroze Amjad</Authors>
-    <Description>A .NET global tool for interacting with Microsoft Graph — manage emails, calendar events, Teams chats, To Do tasks, presence, user directory, and OneDrive/SharePoint files from the command line.</Description>
+    <Description>A .NET global tool for interacting with Microsoft Graph — manage emails, calendar events, Teams chats, To Do tasks, presence, user directory, OneDrive/SharePoint files, and SharePoint site pages from the command line.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/afroze9/graph-cli</PackageProjectUrl>

@@ -34,7 +34,7 @@ dotnet tool install -g graph-cli --add-source ./nupkg
    - `Chat.Create`, `Chat.ReadWrite`, `ChatMessage.Read`, `ChatMessage.Send`
    - `Presence.Read.All`
    - `Tasks.ReadWrite`
-   - `Files.Read.All`, `Sites.Read.All`
+   - `Files.Read.All`, `Sites.Read.All` (or `Sites.ReadWrite.All` for page create/update/publish)
 5. Click **Grant admin consent** (or ask your tenant admin to do this)
 
 ### 2. Configure graph-cli
@@ -196,6 +196,20 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | **Pages (SharePoint)** | | | |
 | pages list | ✅ | ✅ | `pages_list` |
 | pages get | ✅ | ✅ | `pages_get` |
+| pages create | ✅ | ✅ | `pages_create` |
+| pages update | ✅ | ✅ | `pages_update` |
+| pages publish | ✅ | ✅ | `pages_publish` |
+| pages sections list | ✅ | ✅ | `pages_sections_list` |
+| pages sections get | ✅ | ✅ | `pages_sections_get` |
+| pages sections create | ✅ | ✅ | `pages_sections_create` |
+| pages sections update | ✅ | ✅ | `pages_sections_update` |
+| pages sections delete | ✅ | ✅ | `pages_sections_delete` |
+| pages columns list | ✅ | ✅ | `pages_columns_list` |
+| pages webparts list | ✅ | ✅ | `pages_webparts_list` |
+| pages webparts get | ✅ | ✅ | `pages_webparts_get` |
+| pages webparts create | ✅ | ✅ | `pages_webparts_create` |
+| pages webparts update | ✅ | ✅ | `pages_webparts_update` |
+| pages webparts delete | ✅ | ✅ | `pages_webparts_delete` |
 | **Lists (SharePoint)** | | | |
 | lists list | ✅ | ✅ | `lists_list` |
 | lists items | ✅ | ✅ | `lists_items` |
@@ -301,9 +315,35 @@ graph-cli contacts remove <email-or-group>
 ### SharePoint Sites, Pages & Lists
 
 ```bash
+# Sites
 graph-cli sites search <query> [--top <n>] [--refresh]
+
+# Pages — CRUD and publish
 graph-cli pages list --site <site> [--top <n>] [--search <text>]
 graph-cli pages get <page-id> --site <site> [--expand-content]
+graph-cli pages create --site <site> --title <text> [--name <filename.aspx>] [--content <html>] [--publish]
+graph-cli pages update <page-id> --site <site> [--title <text>] [--content <html>] [--publish]
+graph-cli pages publish <page-id> --site <site>
+
+# Sections — manage page layout sections
+graph-cli pages sections list --site <site> --page-id <id>
+graph-cli pages sections get <section-id> --site <site> --page-id <id>
+graph-cli pages sections create --site <site> --page-id <id> --layout fullWidth|twoColumn|threeColumn|oneThirdLeftColumn|oneThirdRightColumn [--emphasis none|neutral|soft|strong]
+graph-cli pages sections update <section-id> --site <site> --page-id <id> [--layout <layout>] [--emphasis <emphasis>]
+graph-cli pages sections delete <section-id> --site <site> --page-id <id>
+
+# Columns — inspect columns within a section
+graph-cli pages columns list --site <site> --page-id <id> --section-id <id>
+
+# WebParts — manage content within columns
+graph-cli pages webparts list --site <site> --page-id <id> [--section-id <id> --column-id <id>]
+graph-cli pages webparts get <webpart-id> --site <site> --page-id <id> --section-id <id> --column-id <id>
+graph-cli pages webparts create --site <site> --page-id <id> --section-id <id> --column-id <id> --inner-html <html>
+graph-cli pages webparts create --site <site> --page-id <id> --section-id <id> --column-id <id> --webpart-type <guid> [--data-json <json>]
+graph-cli pages webparts update <webpart-id> --site <site> --page-id <id> --section-id <id> --column-id <id> [--inner-html <html>] [--data-json <json>]
+graph-cli pages webparts delete <webpart-id> --site <site> --page-id <id> --section-id <id> --column-id <id>
+
+# Lists
 graph-cli lists list --site <site>
 graph-cli lists items <list-id> --site <site> [--top <n>] [--fields <field1,field2>] [--filter <odata-filter>]
 ```
