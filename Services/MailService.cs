@@ -78,7 +78,7 @@ public static class MailService
         }).ToList() ?? [];
     }
 
-    public static async Task<object> SendAsync(string to, string subject, string body, string? cc, string contentType)
+    public static async Task<object> SendAsync(string to, string subject, string body, string? cc, string contentType, string[]? attachments = null)
     {
         var client = await GraphClientProvider.CreateAsync();
         var message = new Message
@@ -103,12 +103,65 @@ public static class MailService
             }).ToList();
         }
 
+        if (attachments is { Length: > 0 })
+        {
+            message.Attachments = attachments.Select(filePath =>
+            {
+                var fullPath = Path.GetFullPath(filePath);
+                if (!File.Exists(fullPath))
+                    throw new FileNotFoundException($"Attachment file not found: {fullPath}");
+
+                var bytes = File.ReadAllBytes(fullPath);
+                return (Attachment)new FileAttachment
+                {
+                    OdataType = "#microsoft.graph.fileAttachment",
+                    Name = Path.GetFileName(fullPath),
+                    ContentType = MimeTypeMap.GetMimeType(fullPath),
+                    ContentBytes = bytes
+                };
+            }).ToList();
+        }
+
         await client.Me.SendMail.PostAsync(new SendMailPostRequestBody
         {
             Message = message,
             SaveToSentItems = true
         });
         return new { status = "sent", subject, to };
+    }
+
+    private static class MimeTypeMap
+    {
+        private static readonly Dictionary<string, string> MimeTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [".pdf"] = "application/pdf",
+            [".doc"] = "application/msword",
+            [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            [".xls"] = "application/vnd.ms-excel",
+            [".xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            [".ppt"] = "application/vnd.ms-powerpoint",
+            [".pptx"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            [".txt"] = "text/plain",
+            [".csv"] = "text/csv",
+            [".html"] = "text/html",
+            [".htm"] = "text/html",
+            [".json"] = "application/json",
+            [".xml"] = "application/xml",
+            [".zip"] = "application/zip",
+            [".png"] = "image/png",
+            [".jpg"] = "image/jpeg",
+            [".jpeg"] = "image/jpeg",
+            [".gif"] = "image/gif",
+            [".svg"] = "image/svg+xml",
+            [".mp4"] = "video/mp4",
+            [".mp3"] = "audio/mpeg",
+        };
+
+        public static string GetMimeType(string filePath)
+        {
+            var ext = Path.GetExtension(filePath);
+            return MimeTypes.GetValueOrDefault(ext, "application/octet-stream");
+        }
     }
 
     public static async Task<object> DraftAsync(string to, string subject, string body, string contentType)

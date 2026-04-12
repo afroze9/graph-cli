@@ -55,13 +55,14 @@ public static class MailTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "mail_send"), Description("Send an email. Recipients must be in the allowed contacts list (use contacts_list to check, or ask the user to run 'graph-cli contacts allow' to add them).")]
+    [McpServerTool(Name = "mail_send"), Description("Send an email with optional file attachments. Recipients must be in the allowed contacts list (use contacts_list to check, or ask the user to run 'graph-cli contacts allow' to add them).")]
     public static async Task<string> Send(
         [Description("Comma-separated recipient email addresses")] string to,
         [Description("Email subject")] string subject,
         [Description("Email body content")] string body,
         [Description("Comma-separated CC email addresses")] string? cc = null,
-        [Description("Body content type: text or html (default: text)")] string contentType = "text")
+        [Description("Body content type: text or html (default: text)")] string contentType = "text",
+        [Description("Comma-separated file paths to attach (e.g. /path/to/report.pdf,/path/to/data.xlsx)")] string? attachments = null)
     {
         var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
         if (!string.IsNullOrEmpty(cc))
@@ -72,7 +73,10 @@ public static class MailTools
 
         try
         {
-            var result = await MailService.SendAsync(to, subject, body, cc, contentType);
+            var attachmentPaths = string.IsNullOrEmpty(attachments)
+                ? null
+                : attachments.Split(',').Select(p => p.Trim()).ToArray();
+            var result = await MailService.SendAsync(to, subject, body, cc, contentType, attachmentPaths);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }

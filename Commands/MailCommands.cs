@@ -106,7 +106,8 @@ public static class MailCommands
         var bodyOption = new Option<string>("--body") { Description = "Email body", Required = true };
         var ccOption = new Option<string?>("--cc") { Description = "Comma-separated CC emails" };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
-        var cmd = new Command("send", "Send an email") { toOption, subjectOption, bodyOption, ccOption, contentTypeOption };
+        var attachmentOption = new Option<string[]>("--attachment") { Description = "File path(s) to attach (can be specified multiple times)", Arity = ArgumentArity.ZeroOrMore };
+        var cmd = new Command("send", "Send an email") { toOption, subjectOption, bodyOption, ccOption, contentTypeOption, attachmentOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var to = parseResult.GetValue(toOption)!;
@@ -124,13 +125,20 @@ public static class MailCommands
 
             try
             {
+                var attachments = parseResult.GetValue(attachmentOption);
                 var result = await MailService.SendAsync(
                     to,
                     parseResult.GetValue(subjectOption)!,
                     parseResult.GetValue(bodyOption)!,
                     cc,
-                    parseResult.GetValue(contentTypeOption) ?? "text");
+                    parseResult.GetValue(contentTypeOption) ?? "text",
+                    attachments);
                 OutputService.Print(result);
+            }
+            catch (FileNotFoundException ex)
+            {
+                OutputService.PrintError("file_not_found", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {

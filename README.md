@@ -222,7 +222,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 graph-cli mail list [--top <n>] [--folder <name>]
 graph-cli mail get <message-id>
 graph-cli mail search --query <text> [--top <n>]
-graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html]
+graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html] [--attachment <file> ...]
 graph-cli mail draft --to <emails> --subject <text> --body <text>
 graph-cli mail send-draft <message-id>
 graph-cli mail mark-read <message-id> [<id2> ...] [--unread]
