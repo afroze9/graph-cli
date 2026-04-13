@@ -181,8 +181,29 @@ public static class ChatService
             BodyType = m.Body?.ContentType?.ToString(),
             Body = m.Body?.Content,
             m.CreatedDateTime,
-            MessageType = m.MessageType?.ToString()
+            MessageType = m.MessageType?.ToString(),
+            Attachments = m.Attachments?.Select(a => new
+            {
+                a.Id,
+                a.ContentType,
+                a.Name,
+                a.ContentUrl,
+                a.Content
+            }).ToList()
         }).ToList()!;
+    }
+
+    public static async Task<object> DownloadHostedContentAsync(string chatId, string messageId, string hostedContentId, string outPath)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var stream = await client.Me.Chats[chatId].Messages[messageId].HostedContents[hostedContentId].Content.GetAsync();
+        if (stream == null)
+        {
+            return new { status = "error", message = "no content" };
+        }
+        await using var fs = File.Create(outPath);
+        await stream.CopyToAsync(fs);
+        return new { status = "downloaded", file = outPath, size = new FileInfo(outPath).Length };
     }
 
     public static async Task<object> SendAsync(string chatId, string message, string contentType)

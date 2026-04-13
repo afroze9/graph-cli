@@ -20,6 +20,7 @@ public static class ChatCommands
         chatCommand.Subcommands.Add(BuildMessages(formatOption));
         chatCommand.Subcommands.Add(BuildSend(formatOption));
         chatCommand.Subcommands.Add(BuildReply(formatOption));
+        chatCommand.Subcommands.Add(BuildDownloadHostedContent(formatOption));
 
         return chatCommand;
     }
@@ -226,6 +227,33 @@ public static class ChatCommands
             try
             {
                 var result = await ChatService.ReplyAsync(chatId, messageId, message);
+                OutputService.Print(result);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildDownloadHostedContent(Option<string> formatOption)
+    {
+        var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID containing the hosted content" };
+        var hostedContentIdArg = new Argument<string>("hosted-content-id") { Description = "Hosted content ID (from the audio/image card URL)" };
+        var outOption = new Option<string>("--out") { Description = "Output file path", Required = true };
+        var cmd = new Command("download-hosted-content", "Download a hosted content (image/audio) attached to a chat message") { chatIdArg, messageIdArg, hostedContentIdArg, outOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var chatId = parseResult.GetValue(chatIdArg)!;
+            var messageId = parseResult.GetValue(messageIdArg)!;
+            var hostedContentId = parseResult.GetValue(hostedContentIdArg)!;
+            var outPath = parseResult.GetValue(outOption)!;
+            try
+            {
+                var result = await ChatService.DownloadHostedContentAsync(chatId, messageId, hostedContentId, outPath);
                 OutputService.Print(result);
             }
             catch (ODataError ex)
