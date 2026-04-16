@@ -16,6 +16,9 @@ public static class MailCommands
         mailCommand.Subcommands.Add(BuildSend(formatOption));
         mailCommand.Subcommands.Add(BuildDraft(formatOption));
         mailCommand.Subcommands.Add(BuildSendDraft(formatOption));
+        mailCommand.Subcommands.Add(BuildReply(formatOption, replyAll: false));
+        mailCommand.Subcommands.Add(BuildReply(formatOption, replyAll: true));
+        mailCommand.Subcommands.Add(BuildForward(formatOption));
         mailCommand.Subcommands.Add(BuildMove(formatOption));
         mailCommand.Subcommands.Add(BuildDelete(formatOption));
         mailCommand.Subcommands.Add(BuildFolders(formatOption));
@@ -194,6 +197,118 @@ public static class MailCommands
             {
                 var result = await MailService.SendDraftAsync(parseResult.GetValue(messageIdArg)!);
                 OutputService.Print(result);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildReply(Option<string> formatOption, bool replyAll)
+    {
+        var name = replyAll ? "reply-all" : "reply";
+        var description = replyAll
+            ? "Reply to all recipients of a message (preserves thread)"
+            : "Reply to the sender of a message (preserves thread)";
+
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to reply to" };
+        var bodyOption = new Option<string>("--body") { Description = "Reply body (prepended to quoted original)", Required = true };
+        var ccOption = new Option<string?>("--cc") { Description = "Comma-separated additional CC emails" };
+        var bccOption = new Option<string?>("--bcc") { Description = "Comma-separated additional BCC emails" };
+        var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text (keeps quoted thread) or html (replaces body)" };
+        var attachmentOption = new Option<string[]>("--attachment") { Description = "File path(s) to attach", Arity = ArgumentArity.ZeroOrMore };
+        var draftOption = new Option<bool>("--draft") { Description = "Create a draft instead of sending (use 'send-draft' to send later)" };
+
+        var cmd = new Command(name, description) { messageIdArg, bodyOption, ccOption, bccOption, contentTypeOption, attachmentOption, draftOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var cc = parseResult.GetValue(ccOption);
+            var bcc = parseResult.GetValue(bccOption);
+
+            var addedRecipients = new List<string>();
+            if (!string.IsNullOrEmpty(cc)) addedRecipients.AddRange(cc.Split(',').Select(e => e.Trim()));
+            if (!string.IsNullOrEmpty(bcc)) addedRecipients.AddRange(bcc.Split(',').Select(e => e.Trim()));
+            if (addedRecipients.Count > 0 && !AllowedContactsService.CheckAllAndPrompt(addedRecipients, "email"))
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            try
+            {
+                var result = await MailService.ReplyAsync(
+                    parseResult.GetValue(messageIdArg)!,
+                    parseResult.GetValue(bodyOption)!,
+                    parseResult.GetValue(contentTypeOption) ?? "text",
+                    cc,
+                    bcc,
+                    parseResult.GetValue(attachmentOption),
+                    replyAll,
+                    parseResult.GetValue(draftOption));
+                OutputService.Print(result);
+            }
+            catch (FileNotFoundException ex)
+            {
+                OutputService.PrintError("file_not_found", ex.Message);
+                Environment.ExitCode = 1;
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildForward(Option<string> formatOption)
+    {
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to forward" };
+        var toOption = new Option<string>("--to") { Description = "Comma-separated recipient emails", Required = true };
+        var bodyOption = new Option<string>("--body") { Description = "Forward body (prepended to quoted original)", Required = true };
+        var ccOption = new Option<string?>("--cc") { Description = "Comma-separated CC emails" };
+        var bccOption = new Option<string?>("--bcc") { Description = "Comma-separated BCC emails" };
+        var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text (keeps quoted thread) or html (replaces body)" };
+        var attachmentOption = new Option<string[]>("--attachment") { Description = "File path(s) to attach", Arity = ArgumentArity.ZeroOrMore };
+        var draftOption = new Option<bool>("--draft") { Description = "Create a draft instead of sending (use 'send-draft' to send later)" };
+
+        var cmd = new Command("forward", "Forward a message to new recipients (preserves thread)")
+            { messageIdArg, toOption, bodyOption, ccOption, bccOption, contentTypeOption, attachmentOption, draftOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var to = parseResult.GetValue(toOption)!;
+            var cc = parseResult.GetValue(ccOption);
+            var bcc = parseResult.GetValue(bccOption);
+
+            var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
+            if (!string.IsNullOrEmpty(cc)) allRecipients.AddRange(cc.Split(',').Select(e => e.Trim()));
+            if (!string.IsNullOrEmpty(bcc)) allRecipients.AddRange(bcc.Split(',').Select(e => e.Trim()));
+            if (!AllowedContactsService.CheckAllAndPrompt(allRecipients, "email"))
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            try
+            {
+                var result = await MailService.ForwardAsync(
+                    parseResult.GetValue(messageIdArg)!,
+                    to,
+                    parseResult.GetValue(bodyOption)!,
+                    parseResult.GetValue(contentTypeOption) ?? "text",
+                    cc,
+                    bcc,
+                    parseResult.GetValue(attachmentOption),
+                    parseResult.GetValue(draftOption));
+                OutputService.Print(result);
+            }
+            catch (FileNotFoundException ex)
+            {
+                OutputService.PrintError("file_not_found", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {

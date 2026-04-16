@@ -103,24 +103,9 @@ public static class MailService
             }).ToList();
         }
 
-        if (attachments is { Length: > 0 })
-        {
-            message.Attachments = attachments.Select(filePath =>
-            {
-                var fullPath = Path.GetFullPath(filePath);
-                if (!File.Exists(fullPath))
-                    throw new FileNotFoundException($"Attachment file not found: {fullPath}");
-
-                var bytes = File.ReadAllBytes(fullPath);
-                return (Attachment)new FileAttachment
-                {
-                    OdataType = "#microsoft.graph.fileAttachment",
-                    Name = Path.GetFileName(fullPath),
-                    ContentType = MimeTypeMap.GetMimeType(fullPath),
-                    ContentBytes = bytes
-                };
-            }).ToList();
-        }
+        var fileAttachments = BuildFileAttachments(attachments);
+        if (fileAttachments != null)
+            message.Attachments = fileAttachments;
 
         await client.Me.SendMail.PostAsync(new SendMailPostRequestBody
         {
@@ -128,6 +113,37 @@ public static class MailService
             SaveToSentItems = true
         });
         return new { status = "sent", subject, to };
+    }
+
+    private static List<Attachment>? BuildFileAttachments(string[]? attachments)
+    {
+        if (attachments is null || attachments.Length == 0)
+            return null;
+
+        return attachments.Select(filePath =>
+        {
+            var fullPath = Path.GetFullPath(filePath);
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException($"Attachment file not found: {fullPath}");
+
+            var bytes = File.ReadAllBytes(fullPath);
+            return (Attachment)new FileAttachment
+            {
+                OdataType = "#microsoft.graph.fileAttachment",
+                Name = Path.GetFileName(fullPath),
+                ContentType = MimeTypeMap.GetMimeType(fullPath),
+                ContentBytes = bytes
+            };
+        }).ToList();
+    }
+
+    private static List<Recipient>? BuildRecipients(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return null;
+        return csv.Split(',').Select(e => new Recipient
+        {
+            EmailAddress = new EmailAddress { Address = e.Trim() }
+        }).ToList();
     }
 
     private static class MimeTypeMap
@@ -190,6 +206,119 @@ public static class MailService
         var client = await GraphClientProvider.CreateAsync();
         await client.Me.Messages[messageId].Send.PostAsync();
         return new { status = "sent", messageId };
+    }
+
+    public static async Task<object> ReplyAsync(
+        string messageId, string body, string contentType,
+        string? cc, string? bcc, string[]? attachments,
+        bool replyAll, bool draft)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var (comment, messageOverride) = BuildReplyOrForwardPayload(body, contentType, cc, bcc, null, attachments);
+
+        if (draft)
+        {
+            Message? createdDraft;
+            if (replyAll)
+            {
+                var reqBody = new Microsoft.Graph.Me.Messages.Item.CreateReplyAll.CreateReplyAllPostRequestBody();
+                if (comment != null) reqBody.Comment = comment;
+                if (messageOverride != null) reqBody.Message = messageOverride;
+                createdDraft = await client.Me.Messages[messageId].CreateReplyAll.PostAsync(reqBody);
+            }
+            else
+            {
+                var reqBody = new Microsoft.Graph.Me.Messages.Item.CreateReply.CreateReplyPostRequestBody();
+                if (comment != null) reqBody.Comment = comment;
+                if (messageOverride != null) reqBody.Message = messageOverride;
+                createdDraft = await client.Me.Messages[messageId].CreateReply.PostAsync(reqBody);
+            }
+            return new { status = "draft_created", id = createdDraft?.Id, replyAll };
+        }
+
+        if (replyAll)
+        {
+            var reqBody = new Microsoft.Graph.Me.Messages.Item.ReplyAll.ReplyAllPostRequestBody();
+            if (comment != null) reqBody.Comment = comment;
+            if (messageOverride != null) reqBody.Message = messageOverride;
+            await client.Me.Messages[messageId].ReplyAll.PostAsync(reqBody);
+        }
+        else
+        {
+            var reqBody = new Microsoft.Graph.Me.Messages.Item.Reply.ReplyPostRequestBody();
+            if (comment != null) reqBody.Comment = comment;
+            if (messageOverride != null) reqBody.Message = messageOverride;
+            await client.Me.Messages[messageId].Reply.PostAsync(reqBody);
+        }
+        return new { status = "sent", messageId, replyAll };
+    }
+
+    public static async Task<object> ForwardAsync(
+        string messageId, string to, string body, string contentType,
+        string? cc, string? bcc, string[]? attachments, bool draft)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var toRecipients = BuildRecipients(to);
+        var (comment, messageOverride) = BuildReplyOrForwardPayload(body, contentType, cc, bcc, null, attachments);
+
+        if (draft)
+        {
+            var reqBody = new Microsoft.Graph.Me.Messages.Item.CreateForward.CreateForwardPostRequestBody();
+            if (comment != null) reqBody.Comment = comment;
+            if (toRecipients != null) reqBody.ToRecipients = toRecipients;
+            if (messageOverride != null) reqBody.Message = messageOverride;
+            var createdDraft = await client.Me.Messages[messageId].CreateForward.PostAsync(reqBody);
+            return new { status = "draft_created", id = createdDraft?.Id, to };
+        }
+
+        var fwdBody = new Microsoft.Graph.Me.Messages.Item.Forward.ForwardPostRequestBody();
+        if (comment != null) fwdBody.Comment = comment;
+        if (toRecipients != null) fwdBody.ToRecipients = toRecipients;
+        if (messageOverride != null) fwdBody.Message = messageOverride;
+        await client.Me.Messages[messageId].Forward.PostAsync(fwdBody);
+        return new { status = "sent", messageId, to };
+    }
+
+    // Reply/forward Graph endpoints accept a `comment` string that is prepended to the
+    // quoted original, and an optional `message` override for customizing recipients,
+    // attachments, or replacing the body entirely. We use `comment` for text bodies to
+    // preserve the quoted thread. For HTML, we set message.body (which overrides the
+    // default, losing the quoted history — user's choice when they pick --content-type html).
+    private static (string? comment, Message? messageOverride) BuildReplyOrForwardPayload(
+        string body, string contentType, string? cc, string? bcc,
+        string? toOverride, string[]? attachments)
+    {
+        Message? messageOverride = null;
+        string? comment = null;
+
+        var isHtml = string.Equals(contentType, "html", StringComparison.OrdinalIgnoreCase);
+        if (isHtml)
+        {
+            messageOverride = new Message
+            {
+                Body = new ItemBody { ContentType = BodyType.Html, Content = body }
+            };
+        }
+        else
+        {
+            comment = body;
+        }
+
+        var ccRecipients = BuildRecipients(cc);
+        var bccRecipients = BuildRecipients(bcc);
+        var fileAttachments = BuildFileAttachments(attachments);
+        var toRecipients = BuildRecipients(toOverride);
+
+        if (ccRecipients != null || bccRecipients != null || fileAttachments != null || toRecipients != null)
+        {
+            messageOverride ??= new Message();
+            if (ccRecipients != null) messageOverride.CcRecipients = ccRecipients;
+            if (bccRecipients != null) messageOverride.BccRecipients = bccRecipients;
+            if (fileAttachments != null) messageOverride.Attachments = fileAttachments;
+            if (toRecipients != null) messageOverride.ToRecipients = toRecipients;
+        }
+
+        return (comment, messageOverride);
     }
 
     public static async Task<object> MoveAsync(string[] messageIds, string folder)

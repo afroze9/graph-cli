@@ -145,6 +145,9 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | mail send | ✅ | ✅ | `mail_send` |
 | mail draft | ✅ | ✅ | `mail_draft` |
 | mail send-draft | ✅ | ✅ | `mail_send_draft` |
+| mail reply | ✅ | ✅ | `mail_reply` |
+| mail reply-all | ✅ | ✅ | `mail_reply` (with replyAll=true) |
+| mail forward | ✅ | ✅ | `mail_forward` |
 | mail move | ✅ | ✅ | `mail_move` |
 | mail delete | ✅ | ✅ | `mail_delete` |
 | mail mark-read | ✅ | ✅ | `mail_mark_read` |
@@ -225,6 +228,9 @@ graph-cli mail search --query <text> [--top <n>]
 graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html] [--attachment <file> ...]
 graph-cli mail draft --to <emails> --subject <text> --body <text>
 graph-cli mail send-draft <message-id>
+graph-cli mail reply <message-id> --body <text> [--cc <emails>] [--bcc <emails>] [--content-type text|html] [--attachment <file> ...] [--draft]
+graph-cli mail reply-all <message-id> --body <text> [--cc <emails>] [--bcc <emails>] [--content-type text|html] [--attachment <file> ...] [--draft]
+graph-cli mail forward <message-id> --to <emails> --body <text> [--cc <emails>] [--bcc <emails>] [--content-type text|html] [--attachment <file> ...] [--draft]
 graph-cli mail mark-read <message-id> [<id2> ...] [--unread]
 graph-cli mail move <message-id> [<id2> ...] --folder <folder-id-or-name>
 graph-cli mail delete <message-id> [<id2> ...]

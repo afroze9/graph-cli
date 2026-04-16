@@ -103,6 +103,64 @@ public static class MailTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
+    [McpServerTool(Name = "mail_reply"), Description("Reply to an email message (preserves thread). Use replyAll=true to reply to all recipients. Any additional CC/BCC recipients must be in the allowed contacts list.")]
+    public static async Task<string> Reply(
+        [Description("Message ID to reply to")] string messageId,
+        [Description("Reply body (prepended to quoted original)")] string body,
+        [Description("Set to true to reply-all instead of sender-only (default: false)")] bool replyAll = false,
+        [Description("Comma-separated additional CC emails")] string? cc = null,
+        [Description("Comma-separated additional BCC emails")] string? bcc = null,
+        [Description("Body content type: text (keeps quoted thread) or html (replaces body). Default: text")] string contentType = "text",
+        [Description("Comma-separated file paths to attach")] string? attachments = null,
+        [Description("Create a draft instead of sending (default: false)")] bool draft = false)
+    {
+        var added = new List<string>();
+        if (!string.IsNullOrEmpty(cc)) added.AddRange(cc.Split(',').Select(e => e.Trim()));
+        if (!string.IsNullOrEmpty(bcc)) added.AddRange(bcc.Split(',').Select(e => e.Trim()));
+        if (added.Count > 0 && !AllowedContactsService.CheckAllAndPrompt(added, "email", interactive: false))
+            return McpGraphHelper.Error("not_allowed", "One or more added recipients are not in the allowed contacts list.");
+
+        try
+        {
+            var attachmentPaths = string.IsNullOrEmpty(attachments)
+                ? null
+                : attachments.Split(',').Select(p => p.Trim()).ToArray();
+            var result = await MailService.ReplyAsync(messageId, body, contentType, cc, bcc, attachmentPaths, replyAll, draft);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
+    [McpServerTool(Name = "mail_forward"), Description("Forward an email message to new recipients (preserves thread). Recipients must be in the allowed contacts list.")]
+    public static async Task<string> Forward(
+        [Description("Message ID to forward")] string messageId,
+        [Description("Comma-separated recipient email addresses")] string to,
+        [Description("Forward body (prepended to quoted original)")] string body,
+        [Description("Comma-separated CC emails")] string? cc = null,
+        [Description("Comma-separated BCC emails")] string? bcc = null,
+        [Description("Body content type: text (keeps quoted thread) or html (replaces body). Default: text")] string contentType = "text",
+        [Description("Comma-separated file paths to attach")] string? attachments = null,
+        [Description("Create a draft instead of sending (default: false)")] bool draft = false)
+    {
+        var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
+        if (!string.IsNullOrEmpty(cc)) allRecipients.AddRange(cc.Split(',').Select(e => e.Trim()));
+        if (!string.IsNullOrEmpty(bcc)) allRecipients.AddRange(bcc.Split(',').Select(e => e.Trim()));
+        if (!AllowedContactsService.CheckAllAndPrompt(allRecipients, "email", interactive: false))
+            return McpGraphHelper.Error("not_allowed", "One or more recipients are not in the allowed contacts list.");
+
+        try
+        {
+            var attachmentPaths = string.IsNullOrEmpty(attachments)
+                ? null
+                : attachments.Split(',').Select(p => p.Trim()).ToArray();
+            var result = await MailService.ForwardAsync(messageId, to, body, contentType, cc, bcc, attachmentPaths, draft);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
     [McpServerTool(Name = "mail_send_draft"), Description("Send an existing draft email")]
     public static async Task<string> SendDraft(
         [Description("Draft message ID")] string messageId)
