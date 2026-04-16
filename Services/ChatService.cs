@@ -206,7 +206,7 @@ public static class ChatService
         return new { status = "downloaded", file = outPath, size = new FileInfo(outPath).Length };
     }
 
-    public static async Task<object> SendAsync(string chatId, string message, string contentType)
+    public static async Task<object> SendAsync(string chatId, string message, string contentType, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
         var chatMessage = new ChatMessage
@@ -217,24 +217,100 @@ public static class ChatService
                 Content = message
             }
         };
+
+        if (mentions is { Length: > 0 })
+            chatMessage.Mentions = await BuildMentionsAsync(client, message, contentType, mentions);
+
         var sent = await client.Me.Chats[chatId].Messages.PostAsync(chatMessage);
         ChatCacheService.Upsert(chatId, null, null);
         return new { status = "sent", id = sent?.Id, chatId };
     }
 
-    public static async Task<object> ReplyAsync(string chatId, string messageId, string message)
+    public static async Task<object> ReplyAsync(string chatId, string messageId, string message, string contentType, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
         var reply = new ChatMessage
         {
             Body = new ItemBody
             {
-                ContentType = BodyType.Text,
+                ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
                 Content = message
             }
         };
+
+        if (mentions is { Length: > 0 })
+            reply.Mentions = await BuildMentionsAsync(client, message, contentType, mentions);
+
         var sent = await client.Me.Chats[chatId].Messages[messageId].Replies.PostAsync(reply);
         ChatCacheService.Upsert(chatId, null, null);
         return new { status = "replied", id = sent?.Id, chatId, messageId };
+    }
+
+    // Build a ChatMessage.Mentions collection from a list of user emails or AAD IDs.
+    // Body must be HTML and must contain `<at id="N">Name</at>` tags for each mention
+    // (zero-based). Resolves each identifier to an AAD user and sets userIdentityType=aadUser
+    // so Teams fires a notification rather than rendering the @-tag as plain text.
+    private static async Task<List<ChatMessageMention>> BuildMentionsAsync(
+        GraphServiceClient client, string body, string contentType, string[] mentions)
+    {
+        if (!string.Equals(contentType, "html", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                "--mentions requires --content-type html. Reference each mention in the body with <at id=\"N\">Name</at> where N is the zero-based index matching --mentions.");
+
+        var result = new List<ChatMessageMention>();
+        for (int i = 0; i < mentions.Length; i++)
+        {
+            var identifier = mentions[i].Trim();
+
+            // Graph requires the `<at id="N">Display</at>` tag in the body, and the inner
+            // text must match the mention's MentionText. Extract the inner text from the
+            // body so callers can write any display text they like (e.g. "Ali") without
+            // having to match the user's full AAD displayName.
+            var atMatch = System.Text.RegularExpressions.Regex.Match(
+                body,
+                $"<at id=[\"']{i}[\"'][^>]*>(.*?)</at>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (!atMatch.Success)
+                throw new ArgumentException(
+                    $"--mentions: body is missing <at id=\"{i}\">...</at> tag for mention #{i} ({identifier}). Add it to the --message HTML so Teams can render the @-mention.");
+            var mentionText = atMatch.Groups[1].Value.Trim();
+
+            Microsoft.Graph.Models.User? user;
+            try
+            {
+                user = await client.Users[identifier].GetAsync(r =>
+                {
+                    r.QueryParameters.Select = ["id", "displayName"];
+                });
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+            {
+                throw new ArgumentException(
+                    $"--mentions: could not resolve user '{identifier}': {ex.Error?.Message ?? ex.Message}");
+            }
+
+            if (user?.Id == null)
+                throw new ArgumentException($"--mentions: user '{identifier}' not found");
+
+            var identity = new Identity
+            {
+                Id = user.Id,
+                DisplayName = user.DisplayName
+            };
+            // userIdentityType is not a typed property on Identity; Graph expects it
+            // as an extension field in the JSON — populate via AdditionalData.
+            identity.AdditionalData["userIdentityType"] = "aadUser";
+
+            result.Add(new ChatMessageMention
+            {
+                Id = i,
+                MentionText = mentionText,
+                Mentioned = new ChatMessageMentionedIdentitySet
+                {
+                    User = identity
+                }
+            });
+        }
+        return result;
     }
 }

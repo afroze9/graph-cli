@@ -95,38 +95,49 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "chat_send"), Description("Send a message in a Teams chat. Chat must be in the allowed contacts list.")]
+    [McpServerTool(Name = "chat_send"), Description("Send a message in a Teams chat. Chat must be in the allowed contacts list. To @-mention users (fires Teams notifications), set contentType=html, include <at id=\"N\">Name</at> tags in the message body, and pass a comma-separated emails/AAD IDs list in `mentions` where index N matches the at-tag id.")]
     public static async Task<string> Send(
         [Description("Chat ID")] string chatId,
         [Description("Message text")] string message,
-        [Description("Content type: text or html (default: text)")] string contentType = "text")
+        [Description("Content type: text or html (default: text). Required to be html when mentions is set.")] string contentType = "text",
+        [Description("Comma-separated emails or AAD user IDs to @-mention. Body must contain <at id=\"N\">Name</at> tags (N is zero-based index into this list).")] string? mentions = null)
     {
         if (!AllowedContactsService.CheckAndPrompt(chatId, "chat", interactive: false))
             return McpGraphHelper.Error("not_allowed", "This chat is not in the allowed contacts list. Ask the user to run 'graph-cli contacts allow <chatId> --actions chat' to add it.");
 
         try
         {
-            var result = await ChatService.SendAsync(chatId, message, contentType);
+            var mentionList = string.IsNullOrEmpty(mentions)
+                ? null
+                : mentions.Split(',').Select(m => m.Trim()).ToArray();
+            var result = await ChatService.SendAsync(chatId, message, contentType, mentionList);
             return McpGraphHelper.ToJson(result);
         }
+        catch (ArgumentException ex) { return McpGraphHelper.Error("invalid_argument", ex.Message); }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "chat_reply"), Description("Reply to a message in a Teams chat. Chat must be in the allowed contacts list.")]
+    [McpServerTool(Name = "chat_reply"), Description("Reply to a message in a Teams chat. Chat must be in the allowed contacts list. Supports @-mentions the same way chat_send does.")]
     public static async Task<string> Reply(
         [Description("Chat ID")] string chatId,
         [Description("Message ID to reply to")] string messageId,
-        [Description("Reply text")] string message)
+        [Description("Reply text")] string message,
+        [Description("Content type: text or html (default: text). Required to be html when mentions is set.")] string contentType = "text",
+        [Description("Comma-separated emails or AAD user IDs to @-mention. Body must contain <at id=\"N\">Name</at> tags (N is zero-based index into this list).")] string? mentions = null)
     {
         if (!AllowedContactsService.CheckAndPrompt(chatId, "chat", interactive: false))
             return McpGraphHelper.Error("not_allowed", "This chat is not in the allowed contacts list. Ask the user to run 'graph-cli contacts allow <chatId> --actions chat' to add it.");
 
         try
         {
-            var result = await ChatService.ReplyAsync(chatId, messageId, message);
+            var mentionList = string.IsNullOrEmpty(mentions)
+                ? null
+                : mentions.Split(',').Select(m => m.Trim()).ToArray();
+            var result = await ChatService.ReplyAsync(chatId, messageId, message, contentType, mentionList);
             return McpGraphHelper.ToJson(result);
         }
+        catch (ArgumentException ex) { return McpGraphHelper.Error("invalid_argument", ex.Message); }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }

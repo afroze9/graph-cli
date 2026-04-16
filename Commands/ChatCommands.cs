@@ -179,12 +179,14 @@ public static class ChatCommands
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageOption = new Option<string>("--message") { Description = "Message text", Required = true };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Content type: text or html" };
-        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption };
+        var mentionsOption = new Option<string?>("--mentions") { Description = "Comma-separated user emails or AAD IDs to @-mention (requires --content-type html; body must contain <at id=\"N\">Name</at> tags)" };
+        var cmd = new Command("send", "Send a chat message") { chatIdArg, messageOption, contentTypeOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
             var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
+            var mentionsCsv = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -194,8 +196,16 @@ public static class ChatCommands
 
             try
             {
-                var result = await ChatService.SendAsync(chatId, message, contentType);
+                var mentions = string.IsNullOrEmpty(mentionsCsv)
+                    ? null
+                    : mentionsCsv.Split(',').Select(m => m.Trim()).ToArray();
+                var result = await ChatService.SendAsync(chatId, message, contentType, mentions);
                 OutputService.Print(result);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {
@@ -211,12 +221,16 @@ public static class ChatCommands
         var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
         var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to reply to" };
         var messageOption = new Option<string>("--message") { Description = "Reply text", Required = true };
-        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption };
+        var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Content type: text or html" };
+        var mentionsOption = new Option<string?>("--mentions") { Description = "Comma-separated user emails or AAD IDs to @-mention (requires --content-type html; body must contain <at id=\"N\">Name</at> tags)" };
+        var cmd = new Command("reply", "Reply to a chat message") { chatIdArg, messageIdArg, messageOption, contentTypeOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var chatId = parseResult.GetValue(chatIdArg)!;
             var messageId = parseResult.GetValue(messageIdArg)!;
             var message = parseResult.GetValue(messageOption)!;
+            var contentType = parseResult.GetValue(contentTypeOption) ?? "text";
+            var mentionsCsv = parseResult.GetValue(mentionsOption);
 
             if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
             {
@@ -226,8 +240,16 @@ public static class ChatCommands
 
             try
             {
-                var result = await ChatService.ReplyAsync(chatId, messageId, message);
+                var mentions = string.IsNullOrEmpty(mentionsCsv)
+                    ? null
+                    : mentionsCsv.Split(',').Select(m => m.Trim()).ToArray();
+                var result = await ChatService.ReplyAsync(chatId, messageId, message, contentType, mentions);
                 OutputService.Print(result);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {
