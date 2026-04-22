@@ -5,3 +5,4 @@ nupkg/
 *.suo
 .vs/
 *.DotSettings.user
+.claude/settings.local.json
