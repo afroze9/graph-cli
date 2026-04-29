@@ -45,7 +45,8 @@ public static class ListsCommands
         var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 50, Description = "Number of items to retrieve" };
         var fieldsOption = new Option<string?>("--fields") { Description = "Comma-separated field names to select (e.g. Title,Status,Priority)" };
         var filterOption = new Option<string?>("--filter") { Description = "OData filter expression (e.g. \"fields/Status eq 'Active'\")" };
-        var cmd = new Command("items", "List items in a SharePoint list") { listArg, siteOption, topOption, fieldsOption, filterOption };
+        var expandLookupsOption = new Option<string?>("--expand-lookups") { Description = "Comma-separated lookup column names to resolve (e.g. GDCProjectManager,GDCPortfolioLead). Returns {LookupId, LookupValue} alongside the raw *LookupId. Use with --fields to keep other columns visible." };
+        var cmd = new Command("items", "List items in a SharePoint list") { listArg, siteOption, topOption, fieldsOption, filterOption, expandLookupsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
@@ -54,9 +55,10 @@ public static class ListsCommands
             var top = parseResult.GetValue(topOption);
             var fields = parseResult.GetValue(fieldsOption);
             var filter = parseResult.GetValue(filterOption);
+            var expandLookups = parseResult.GetValue(expandLookupsOption);
             try
             {
-                var result = await ListService.ItemsAsync(site, listId, top, fields, filter);
+                var result = await ListService.ItemsAsync(site, listId, top, fields, filter, expandLookups);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex)
