@@ -99,11 +99,33 @@ public static class UserCommands
             }
         });
 
+        // user photo <user-id-or-email> --out <path>
+        var photoUserIdArg = new Argument<string>("user-id-or-email") { Description = "User ID or email address" };
+        var photoOutOption = new Option<string>("--out") { Description = "Output file path (e.g. avatar.jpg)", Required = true };
+        var photoCommand = new Command("photo", "Download a user's profile photo") { photoUserIdArg, photoOutOption };
+        photoCommand.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var userId = parseResult.GetValue(photoUserIdArg)!;
+            var outPath = parseResult.GetValue(photoOutOption)!;
+            try
+            {
+                var result = await UserService.GetPhotoAsync(userId, outPath);
+                OutputService.Print(result, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+
         userCommand.Subcommands.Add(meCommand);
         userCommand.Subcommands.Add(getCommand);
         userCommand.Subcommands.Add(searchCommand);
         userCommand.Subcommands.Add(managerCommand);
         userCommand.Subcommands.Add(reportsCommand);
+        userCommand.Subcommands.Add(photoCommand);
         return userCommand;
     }
 }

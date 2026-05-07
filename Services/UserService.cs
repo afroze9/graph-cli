@@ -57,6 +57,19 @@ public static class UserService
         return await GetUserAsync(manager.Id);
     }
 
+    public static async Task<object> GetPhotoAsync(string userId, string outPath)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var stream = await client.Users[userId].Photo.Content.GetAsync();
+        if (stream == null)
+        {
+            return new { status = "error", message = "no photo" };
+        }
+        await using var fs = File.Create(outPath);
+        await stream.CopyToAsync(fs);
+        return new { status = "downloaded", file = outPath, size = new FileInfo(outPath).Length };
+    }
+
     public static async Task<object> GetReportsAsync()
     {
         var client = await GraphClientProvider.CreateAsync();
