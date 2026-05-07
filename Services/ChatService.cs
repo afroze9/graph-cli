@@ -87,6 +87,68 @@ public static class ChatService
         }).ToList();
     }
 
+    public static async Task<object> FindWithAsync(string user, string? type, int top)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+
+        Microsoft.Graph.Models.User? resolved;
+        try
+        {
+            resolved = await client.Users[user].GetAsync(r =>
+            {
+                r.QueryParameters.Select = ["id", "displayName", "mail", "userPrincipalName"];
+            });
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            throw new ArgumentException($"could not resolve user '{user}': {ex.Error?.Message ?? ex.Message}");
+        }
+
+        if (resolved?.Id == null)
+            throw new ArgumentException($"user '{user}' not found");
+
+        var memberFilter = $"members/any(o:o/microsoft.graph.aadUserConversationMember/userId eq '{resolved.Id}')";
+        var filter = type switch
+        {
+            "oneOnOne" => $"chatType eq 'oneOnOne' and {memberFilter}",
+            "group" => $"chatType eq 'group' and {memberFilter}",
+            _ => memberFilter
+        };
+
+        var chats = await client.Me.Chats.GetAsync(r =>
+        {
+            r.QueryParameters.Top = top;
+            r.QueryParameters.Filter = filter;
+            r.QueryParameters.Expand = ["members"];
+            r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime"];
+        });
+
+        if (chats?.Value != null)
+        {
+            ChatCacheService.UpsertMany(chats.Value
+                .Where(c => c.Id != null)
+                .Select(c => (c.Id!, c.Topic, c.ChatType?.ToString())));
+        }
+
+        return new
+        {
+            user = new { resolved.Id, resolved.DisplayName, Email = resolved.Mail ?? resolved.UserPrincipalName },
+            chats = chats?.Value?.Select(c => new
+            {
+                c.Id,
+                c.Topic,
+                ChatType = c.ChatType?.ToString(),
+                c.CreatedDateTime,
+                c.LastUpdatedDateTime,
+                Members = c.Members?.Select(m => new
+                {
+                    m.DisplayName,
+                    Email = (m as AadUserConversationMember)?.Email
+                }).ToList()
+            }).ToList()
+        };
+    }
+
     public static async Task<object> GetAsync(string chatId)
     {
         var client = await GraphClientProvider.CreateAsync();

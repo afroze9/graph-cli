@@ -14,6 +14,7 @@ public static class ChatCommands
 
         chatCommand.Subcommands.Add(BuildList(formatOption));
         chatCommand.Subcommands.Add(BuildSearch(formatOption));
+        chatCommand.Subcommands.Add(BuildFindWith(formatOption));
         chatCommand.Subcommands.Add(BuildGet(formatOption));
         chatCommand.Subcommands.Add(BuildCreate(formatOption));
         chatCommand.Subcommands.Add(BuildMembers(formatOption));
@@ -63,6 +64,37 @@ public static class ChatCommands
             {
                 var result = await ChatService.SearchAsync(query, top, refresh);
                 OutputService.Print(result, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildFindWith(Option<string> formatOption)
+    {
+        var userOption = new Option<string>("--user") { Description = "User email, UPN, or AAD object ID", Required = true };
+        var typeOption = new Option<string>("--type") { DefaultValueFactory = _ => "all", Description = "Chat type filter: oneOnOne, group, or all" };
+        var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 20, Description = "Max results to return" };
+        var cmd = new Command("find-with", "Find chats whose members include a specific user (server-side filter)") { userOption, typeOption, topOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var user = parseResult.GetValue(userOption)!;
+            var type = parseResult.GetValue(typeOption) ?? "all";
+            var top = parseResult.GetValue(topOption);
+            try
+            {
+                var result = await ChatService.FindWithAsync(user, type, top);
+                OutputService.Print(result, format);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {

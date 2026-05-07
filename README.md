@@ -167,6 +167,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | **Chat (Teams)** | | | |
 | chat list | ✅ | ✅ | `chat_list` |
 | chat search | ✅ | ✅ | `chat_search` |
+| chat find-with | ✅ | ✅ | `chat_find_with` |
 | chat get | ✅ | ✅ | `chat_get` |
 | chat create | ✅ | ✅ | `chat_create` |
 | chat members | ✅ | ✅ | `chat_members` |
@@ -261,6 +262,7 @@ graph-cli calendar schedule --users <emails> --start <iso-datetime> --end <iso-d
 ```bash
 graph-cli chat list [--top <n>]
 graph-cli chat search --query <text> [--top <n>] [--refresh]
+graph-cli chat find-with --user <email-or-id> [--type oneOnOne|group|all] [--top <n>]
 graph-cli chat get <chat-id>
 graph-cli chat create --members <emails> [--topic <text>] [--type oneOnOne|group]
 graph-cli chat members <chat-id>

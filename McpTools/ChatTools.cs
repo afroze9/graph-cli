@@ -36,6 +36,22 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
+    [McpServerTool(Name = "chat_find_with"), Description("Find Teams chats whose members include a specific user. Uses a Graph $filter on members/userId, so it locates 1:1 and group chats with that person without scanning the full chat list.")]
+    public static async Task<string> FindWith(
+        [Description("User email, UPN, or AAD object ID")] string user,
+        [Description("Chat type filter: oneOnOne, group, or all (default: all)")] string type = "all",
+        [Description("Max results to return (default: 20)")] int top = 20)
+    {
+        try
+        {
+            var result = await ChatService.FindWithAsync(user, type, top);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ArgumentException ex) { return McpGraphHelper.Error("invalid_argument", ex.Message); }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
     [McpServerTool(Name = "chat_get"), Description("Get details of a specific Teams chat")]
     public static async Task<string> Get(
         [Description("Chat ID")] string chatId)
