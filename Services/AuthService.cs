@@ -40,6 +40,7 @@ public class AuthService
 
     public async Task<string> GetAccessTokenAsync()
     {
+        ConsentService.EnsureConsented();
         var pca = await GetPcaAsync();
         var accounts = await pca.GetAccountsAsync();
         var config = LoadOrCreateConfig();
@@ -61,6 +62,7 @@ public class AuthService
 
     public async Task<AuthenticationResult> LoginAsync()
     {
+        ConsentService.EnsureConsented();
         var pca = await GetPcaAsync();
         var config = LoadOrCreateConfig();
         return await pca.AcquireTokenInteractive(config.Scopes)
