@@ -268,6 +268,54 @@ public static class ChatService
         return new { status = "downloaded", file = outPath, size = new FileInfo(outPath).Length };
     }
 
+    public static async Task<object> SendImageAsync(string chatId, string imagePath, string? caption = null)
+    {
+        if (!File.Exists(imagePath))
+            throw new ArgumentException($"Image file not found: {imagePath}");
+
+        var imageBytes = await File.ReadAllBytesAsync(imagePath);
+        var ext = Path.GetExtension(imagePath).TrimStart('.').ToLowerInvariant();
+        var mimeType = ext switch
+        {
+            "jpg" or "jpeg" => "image/jpeg",
+            "gif"           => "image/gif",
+            "webp"          => "image/webp",
+            _               => "image/png"
+        };
+
+        var client = await GraphClientProvider.CreateAsync();
+
+        // Build body: optional caption text above the inline image
+        var bodyHtml = string.IsNullOrWhiteSpace(caption)
+            ? "<img src=\"../hostedContents/1/$value\" style=\"vertical-align:bottom;max-width:800px;\" />"
+            : $"<p>{System.Net.WebUtility.HtmlEncode(caption)}</p><img src=\"../hostedContents/1/$value\" style=\"vertical-align:bottom;max-width:800px;\" />";
+
+        var chatMessage = new ChatMessage
+        {
+            Body = new ItemBody
+            {
+                ContentType = BodyType.Html,
+                Content = bodyHtml
+            },
+            HostedContents = new List<ChatMessageHostedContent>
+            {
+                new ChatMessageHostedContent
+                {
+                    ContentBytes = imageBytes,
+                    ContentType = mimeType,
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        { "@microsoft.graph.temporaryId", "1" }
+                    }
+                }
+            }
+        };
+
+        var sent = await client.Me.Chats[chatId].Messages.PostAsync(chatMessage);
+        ChatCacheService.Upsert(chatId, null, null);
+        return new { status = "sent", id = sent?.Id, chatId, imagePath, mimeType };
+    }
+
     public static async Task<object> SendAsync(string chatId, string message, string contentType, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
