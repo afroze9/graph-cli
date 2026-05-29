@@ -1,5 +1,6 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions.Serialization;
 
 namespace GraphCli.Services;
 
@@ -78,7 +79,7 @@ public static class ListService
         return rawItems.Select(i =>
         {
             var fld = i.Fields?.AdditionalData != null
-                ? new Dictionary<string, object?>(i.Fields.AdditionalData)
+                ? i.Fields.AdditionalData.ToDictionary(kv => kv.Key, kv => Normalize(kv.Value))
                 : new Dictionary<string, object?>();
 
             if (userMap != null)
@@ -106,6 +107,60 @@ public static class ListService
             };
         }).ToList<object>();
     }
+
+    public static async Task<object> ColumnsAsync(string site, string listId)
+    {
+        var client = await GraphClientProvider.CreateAsync();
+        var siteId = await PageService.ResolveSiteIdAsync(client, site);
+
+        var columns = await client.Sites[siteId].Lists[listId].Columns.GetAsync();
+
+        return columns?.Value?.Select(c => new
+        {
+            c.DisplayName,
+            c.Name,
+            c.Description,
+            Type = ColumnType(c),
+            c.Hidden,
+            c.ReadOnly,
+            Choices = c.Choice?.Choices
+        }).ToList() ?? [];
+    }
+
+    private static string? ColumnType(ColumnDefinition c) => c switch
+    {
+        { Text: not null } => "text",
+        { Choice: not null } => "choice",
+        { Number: not null } => "number",
+        { DateTime: not null } => "dateTime",
+        { Boolean: not null } => "boolean",
+        { Currency: not null } => "currency",
+        { Lookup: not null } => "lookup",
+        { PersonOrGroup: not null } => "personOrGroup",
+        { HyperlinkOrPicture: not null } => "hyperlinkOrPicture",
+        { Calculated: not null } => "calculated",
+        { Geolocation: not null } => "geolocation",
+        _ => null
+    };
+
+    // Graph returns complex list-field values (multi-value choice, lookups) as
+    // Kiota UntypedNode instances. System.Text.Json can't serialize those — a
+    // multi-choice column would emit as an empty {}. Unwrap them into plain CLR
+    // values so arrays/objects serialize like every other field type.
+    private static object? Normalize(object? value) => value switch
+    {
+        UntypedString s => s.GetValue(),
+        UntypedBoolean b => b.GetValue(),
+        UntypedInteger i => i.GetValue(),
+        UntypedLong l => l.GetValue(),
+        UntypedDecimal m => m.GetValue(),
+        UntypedDouble d => d.GetValue(),
+        UntypedFloat f => f.GetValue(),
+        UntypedNull => null,
+        UntypedArray arr => arr.GetValue().Select(Normalize).ToList(),
+        UntypedObject obj => obj.GetValue().ToDictionary(kv => kv.Key, kv => Normalize(kv.Value)),
+        _ => value
+    };
 
     private static async Task<Dictionary<int, Dictionary<string, object?>>> ResolveUserInfoAsync(
         GraphServiceClient client, string siteId, HashSet<int> ids)

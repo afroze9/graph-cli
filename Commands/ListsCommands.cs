@@ -12,6 +12,7 @@ public static class ListsCommands
 
         listsCommand.Subcommands.Add(BuildList(formatOption));
         listsCommand.Subcommands.Add(BuildItems(formatOption));
+        listsCommand.Subcommands.Add(BuildColumns(formatOption));
 
         return listsCommand;
     }
@@ -59,6 +60,30 @@ public static class ListsCommands
             try
             {
                 var result = await ListService.ItemsAsync(site, listId, top, fields, filter, expandLookups);
+                OutputService.Print(result, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildColumns(Option<string> formatOption)
+    {
+        var listArg = new Argument<string>("list-id") { Description = "List ID or name" };
+        var siteOption = new Option<string>("--site") { Description = "SharePoint site (name, ID, or hostname path)", Required = true };
+        var cmd = new Command("columns", "List column definitions (displayName + internal name) for a SharePoint list") { listArg, siteOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var listId = parseResult.GetValue(listArg)!;
+            var site = parseResult.GetValue(siteOption)!;
+            try
+            {
+                var result = await ListService.ColumnsAsync(site, listId);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex)

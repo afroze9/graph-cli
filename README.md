@@ -217,6 +217,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | **Lists (SharePoint)** | | | |
 | lists list | ✅ | ✅ | `lists_list` |
 | lists items | ✅ | ✅ | `lists_items` |
+| lists columns | ✅ | ✅ | `lists_columns` |
 
 > Commands marked **—** in MCP are either interactive-only (`auth login`, `auth logout`) or involve file system operations (`download-attachment`, `files download`) that don't translate to the MCP context.
 
@@ -261,7 +262,7 @@ graph-cli calendar schedule --users <emails> --start <iso-datetime> --end <iso-d
 
 ```bash
 graph-cli chat list [--top <n>]
-graph-cli chat search --query <text> [--top <n>] [--refresh]
+graph-cli chat search --query <text> [--top <n>] [--refresh] [--max-depth <n>]
 graph-cli chat find-with --user <email-or-id> [--type oneOnOne|group|all] [--top <n>]
 graph-cli chat get <chat-id>
 graph-cli chat create --members <emails> [--topic <text>] [--type oneOnOne|group]
@@ -353,7 +354,8 @@ graph-cli pages webparts delete <webpart-id> --site <site> --page-id <id> --sect
 
 # Lists
 graph-cli lists list --site <site>
-graph-cli lists items <list-id> --site <site> [--top <n>] [--fields <field1,field2>] [--filter <odata-filter>]
+graph-cli lists items <list-id> --site <site> [--top <n>] [--fields <field1,field2>] [--filter <odata-filter>] [--expand-lookups <col1,col2>]
+graph-cli lists columns <list-id> --site <site>   # column definitions: displayName + internal name
 ```
 
 ## Architecture

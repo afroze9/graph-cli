@@ -38,4 +38,18 @@ public static class ListsTools
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
+
+    [McpServerTool(Name = "lists_columns"), Description("List column definitions (displayName + internal name) for a SharePoint list, to map mangled internal field names back to their real question/column text")]
+    public static async Task<string> Columns(
+        [Description("SharePoint site (name, ID, or hostname path)")] string site,
+        [Description("List ID or name")] string listId)
+    {
+        try
+        {
+            var result = await ListService.ColumnsAsync(site, listId);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
 }
