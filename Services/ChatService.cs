@@ -32,8 +32,9 @@ public static class ChatService
         return results!;
     }
 
-    public static async Task<object> SearchAsync(string query, int top, bool refresh)
+    public static async Task<object> SearchAsync(string query, int top, bool refresh, int maxDepth)
     {
+        // Fast path: search cache by topic OR member display name OR email.
         if (!refresh)
         {
             var cached = ChatCacheService.Search(query, top);
@@ -44,47 +45,78 @@ public static class ChatService
                     c.Id,
                     Topic = c.Name,
                     c.ChatType,
+                    c.Members,
+                    c.LastUpdatedDateTime,
                     c.LastUsed,
                     Source = "cache"
                 }).ToList();
             }
         }
 
+        // Refresh path: fetch up to maxDepth most-recently-active chats with
+        // members expanded, merge into the cache, then re-run the cache search.
+        await RefreshAsync(maxDepth);
+
+        return ChatCacheService.Search(query, top).Select(c => new
+        {
+            c.Id,
+            Topic = c.Name,
+            c.ChatType,
+            c.Members,
+            c.LastUpdatedDateTime,
+            c.LastUsed,
+            Source = refresh ? "api (refresh)" : "api (cache miss)"
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Paginated pull of Me/Chats with $expand=members, ordered by most recent
+    /// activity. Merges into the on-disk chat cache. Stops once <paramref name="maxDepth"/>
+    /// chats have been fetched or pagination ends.
+    /// </summary>
+    /// <remarks>
+    /// Graph caps $top at 50 per page and caps expanded members at 25 per chat
+    /// regardless of $top. The 25-member cap is acceptable for 1:1 and small
+    /// group chats; large groups will only have their first 25 members cached.
+    /// </remarks>
+    private static async Task RefreshAsync(int maxDepth)
+    {
         var client = await GraphClientProvider.CreateAsync();
-        var matched = new List<Chat>();
+        var fetched = 0;
 
         var page = await client.Me.Chats.GetAsync(r =>
         {
-            r.QueryParameters.Top = 50;
+            r.QueryParameters.Top = Math.Min(50, maxDepth);
+            r.QueryParameters.Expand = ["members"];
+            r.QueryParameters.Orderby = ["lastMessagePreview/createdDateTime desc"];
             r.QueryParameters.Select = ["id", "topic", "chatType", "createdDateTime", "lastUpdatedDateTime"];
         });
 
         while (page?.Value != null)
         {
-            ChatCacheService.UpsertMany(page.Value
+            var entries = page.Value
                 .Where(c => c.Id != null)
-                .Select(c => (c.Id!, c.Topic, c.ChatType?.ToString())));
+                .Select(c => new ChatCacheEntry(
+                    c.Id!,
+                    c.Topic,
+                    c.ChatType?.ToString(),
+                    c.Members?.Select(m => new CachedMember
+                    {
+                        DisplayName = m.DisplayName,
+                        Email = (m as AadUserConversationMember)?.Email,
+                        UserId = (m as AadUserConversationMember)?.UserId
+                    }).ToList(),
+                    c.LastUpdatedDateTime))
+                .ToList();
 
-            foreach (var c in page.Value)
-            {
-                if (c.Topic != null && c.Topic.Contains(query, StringComparison.OrdinalIgnoreCase))
-                {
-                    matched.Add(c);
-                    if (matched.Count >= top) break;
-                }
-            }
-            if (matched.Count >= top || string.IsNullOrEmpty(page.OdataNextLink)) break;
+            ChatCacheService.UpsertMany(entries);
+            fetched += entries.Count;
+
+            if (fetched >= maxDepth || string.IsNullOrEmpty(page.OdataNextLink))
+                break;
+
             page = await client.Me.Chats.WithUrl(page.OdataNextLink).GetAsync();
         }
-
-        return matched.Select(c => new
-        {
-            c.Id,
-            c.Topic,
-            ChatType = c.ChatType?.ToString(),
-            c.CreatedDateTime,
-            c.LastUpdatedDateTime
-        }).ToList();
     }
 
     public static async Task<object> FindWithAsync(string user, string? type, int top)
@@ -273,15 +305,26 @@ public static class ChatService
         if (!File.Exists(imagePath))
             throw new ArgumentException($"Image file not found: {imagePath}");
 
-        var imageBytes = await File.ReadAllBytesAsync(imagePath);
         var ext = Path.GetExtension(imagePath).TrimStart('.').ToLowerInvariant();
         var mimeType = ext switch
         {
+            "png"           => "image/png",
             "jpg" or "jpeg" => "image/jpeg",
             "gif"           => "image/gif",
             "webp"          => "image/webp",
-            _               => "image/png"
+            _               => throw new ArgumentException(
+                $"Unsupported image type '.{ext}'. Supported types: png, jpg, jpeg, gif, webp.")
         };
+
+        var imageBytes = await File.ReadAllBytesAsync(imagePath);
+
+        // Teams inline hosted content is capped at ~4 MB; fail early with a clear
+        // message rather than letting Graph reject it with an opaque error.
+        const int maxInlineBytes = 4 * 1024 * 1024;
+        if (imageBytes.Length > maxInlineBytes)
+            throw new ArgumentException(
+                $"Image is {imageBytes.Length / (1024 * 1024.0):0.0} MB, which exceeds the ~4 MB inline limit. " +
+                "Share it as a file instead (e.g. 'files share').");
 
         var client = await GraphClientProvider.CreateAsync();
 
@@ -313,7 +356,7 @@ public static class ChatService
 
         var sent = await client.Me.Chats[chatId].Messages.PostAsync(chatMessage);
         ChatCacheService.Upsert(chatId, null, null);
-        return new { status = "sent", id = sent?.Id, chatId, imagePath, mimeType };
+        return new { status = "sent", id = sent?.Id, chatId, mimeType };
     }
 
     public static async Task<object> SendAsync(string chatId, string message, string contentType, string[]? mentions = null)

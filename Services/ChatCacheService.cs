@@ -32,59 +32,49 @@ public static class ChatCacheService
     }
 
     /// <summary>
-    /// Add or update a chat in the cache.
+    /// Add or update a chat in the cache. Topic-only overload kept for callers
+    /// that don't have member or lastUpdated info (e.g. chat get / chat list).
     /// </summary>
     public static void Upsert(string id, string? name, string? chatType)
-    {
-        var cache = Load();
-        var existing = cache.Chats.FirstOrDefault(c =>
-            c.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-
-        if (existing != null)
-        {
-            if (!string.IsNullOrEmpty(name)) existing.Name = name;
-            if (!string.IsNullOrEmpty(chatType)) existing.ChatType = chatType;
-            existing.LastUsed = DateTimeOffset.UtcNow;
-        }
-        else
-        {
-            cache.Chats.Add(new CachedChat
-            {
-                Id = id,
-                Name = name ?? "",
-                ChatType = chatType ?? "unknown",
-                LastUsed = DateTimeOffset.UtcNow
-            });
-        }
-
-        Save(cache);
-    }
+        => UpsertMany(new[] { new ChatCacheEntry(id, name, chatType, null, null) });
 
     /// <summary>
-    /// Add or update multiple chats at once.
+    /// Topic-only batch upsert. Kept for back-compat with chat list / find-with.
     /// </summary>
     public static void UpsertMany(IEnumerable<(string Id, string? Name, string? ChatType)> chats)
+        => UpsertMany(chats.Select(c => new ChatCacheEntry(c.Id, c.Name, c.ChatType, null, null)));
+
+    /// <summary>
+    /// Full upsert with members and lastUpdated. Existing fields are preserved
+    /// when the new entry's value is null (e.g. a topic-only call won't wipe
+    /// previously cached members).
+    /// </summary>
+    public static void UpsertMany(IEnumerable<ChatCacheEntry> entries)
     {
         var cache = Load();
 
-        foreach (var (id, name, chatType) in chats)
+        foreach (var e in entries)
         {
             var existing = cache.Chats.FirstOrDefault(c =>
-                c.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+                c.Id.Equals(e.Id, StringComparison.OrdinalIgnoreCase));
 
             if (existing != null)
             {
-                if (!string.IsNullOrEmpty(name)) existing.Name = name;
-                if (!string.IsNullOrEmpty(chatType)) existing.ChatType = chatType;
+                if (!string.IsNullOrEmpty(e.Name)) existing.Name = e.Name;
+                if (!string.IsNullOrEmpty(e.ChatType)) existing.ChatType = e.ChatType;
+                if (e.Members != null) existing.Members = e.Members;
+                if (e.LastUpdatedDateTime.HasValue) existing.LastUpdatedDateTime = e.LastUpdatedDateTime;
                 existing.LastUsed = DateTimeOffset.UtcNow;
             }
             else
             {
                 cache.Chats.Add(new CachedChat
                 {
-                    Id = id,
-                    Name = name ?? "",
-                    ChatType = chatType ?? "unknown",
+                    Id = e.Id,
+                    Name = e.Name ?? "",
+                    ChatType = e.ChatType ?? "unknown",
+                    Members = e.Members,
+                    LastUpdatedDateTime = e.LastUpdatedDateTime,
                     LastUsed = DateTimeOffset.UtcNow
                 });
             }
@@ -94,18 +84,44 @@ public static class ChatCacheService
     }
 
     /// <summary>
-    /// Search the cache by name (case-insensitive contains).
+    /// Search the cache by name OR member display name OR member email (case-insensitive contains).
     /// </summary>
     public static List<CachedChat> Search(string query, int top = 20)
     {
         var cache = Load();
         return cache.Chats
-            .Where(c => c.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(c => c.LastUsed)
+            .Where(c => Matches(c, query))
+            .OrderByDescending(c => c.LastUpdatedDateTime ?? c.LastUsed)
             .Take(top)
             .ToList();
     }
+
+    private static bool Matches(CachedChat c, string query)
+    {
+        if (!string.IsNullOrEmpty(c.Name) && c.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (c.Members != null)
+        {
+            foreach (var m in c.Members)
+            {
+                if (!string.IsNullOrEmpty(m.DisplayName) && m.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (!string.IsNullOrEmpty(m.Email) && m.Email.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
+    }
 }
+
+public record ChatCacheEntry(
+    string Id,
+    string? Name,
+    string? ChatType,
+    List<CachedMember>? Members,
+    DateTimeOffset? LastUpdatedDateTime);
 
 public class ChatCache
 {
@@ -117,5 +133,14 @@ public class CachedChat
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string ChatType { get; set; } = "unknown";
+    public List<CachedMember>? Members { get; set; }
+    public DateTimeOffset? LastUpdatedDateTime { get; set; }
     public DateTimeOffset LastUsed { get; set; }
+}
+
+public class CachedMember
+{
+    public string? DisplayName { get; set; }
+    public string? Email { get; set; }
+    public string? UserId { get; set; }
 }

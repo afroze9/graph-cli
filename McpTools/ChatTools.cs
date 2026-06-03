@@ -21,15 +21,16 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "chat_search"), Description("Search Teams chats by topic")]
+    [McpServerTool(Name = "chat_search"), Description("Search Teams chats by topic, member display name, or member email. Cache-backed: matches against the local cache first; on miss (or with refresh=true) pulls the most recent chats from Graph with members expanded and merges into the cache before re-searching.")]
     public static async Task<string> Search(
-        [Description("Search text (case-insensitive match against chat topic)")] string query,
+        [Description("Search text (case-insensitive match against chat topic, member display name, or member email)")] string query,
         [Description("Max results to return (default: 20)")] int top = 20,
-        [Description("Skip cache and search via API")] bool refresh = false)
+        [Description("Skip cache, force a fresh paginated API fetch (up to maxDepth) and merge into cache")] bool refresh = false,
+        [Description("Maximum number of chats to pull from the API when refreshing or on cache miss, ordered by most recently active (default: 200)")] int maxDepth = 200)
     {
         try
         {
-            var result = await ChatService.SearchAsync(query, top, refresh);
+            var result = await ChatService.SearchAsync(query, top, refresh, maxDepth);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }

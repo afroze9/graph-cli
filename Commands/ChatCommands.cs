@@ -20,6 +20,7 @@ public static class ChatCommands
         chatCommand.Subcommands.Add(BuildMembers(formatOption));
         chatCommand.Subcommands.Add(BuildMessages(formatOption));
         chatCommand.Subcommands.Add(BuildSend(formatOption));
+        chatCommand.Subcommands.Add(BuildSendImage(formatOption));
         chatCommand.Subcommands.Add(BuildReply(formatOption));
         chatCommand.Subcommands.Add(BuildDownloadHostedContent(formatOption));
 
@@ -50,19 +51,21 @@ public static class ChatCommands
 
     private static Command BuildSearch(Option<string> formatOption)
     {
-        var queryOption = new Option<string>("--query") { Description = "Search text (case-insensitive match against chat topic)", Required = true };
+        var queryOption = new Option<string>("--query") { Description = "Search text (case-insensitive match against chat topic, member display name, or member email)", Required = true };
         var topOption = new Option<int>("--top") { DefaultValueFactory = _ => 20, Description = "Max results to return" };
-        var refreshOption = new Option<bool>("--refresh") { DefaultValueFactory = _ => false, Description = "Skip cache and search via API" };
-        var cmd = new Command("search", "Search chats by topic") { queryOption, topOption, refreshOption };
+        var refreshOption = new Option<bool>("--refresh") { DefaultValueFactory = _ => false, Description = "Skip cache, force a fresh paginated API fetch (up to --max-depth) and merge into cache" };
+        var maxDepthOption = new Option<int>("--max-depth") { DefaultValueFactory = _ => 200, Description = "Maximum number of chats to pull from the API when refreshing or on cache miss (ordered by most recently active)" };
+        var cmd = new Command("search", "Search chats by topic or member (cache-backed). On miss the most recent chats are pulled via paginated API call with members expanded.") { queryOption, topOption, refreshOption, maxDepthOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var format = parseResult.GetValue(formatOption) ?? "json";
             var query = parseResult.GetValue(queryOption)!;
             var top = parseResult.GetValue(topOption);
             var refresh = parseResult.GetValue(refreshOption);
+            var maxDepth = parseResult.GetValue(maxDepthOption);
             try
             {
-                var result = await ChatService.SearchAsync(query, top, refresh);
+                var result = await ChatService.SearchAsync(query, top, refresh, maxDepth);
                 OutputService.Print(result, format);
             }
             catch (ODataError ex)
@@ -232,6 +235,43 @@ public static class ChatCommands
                     ? null
                     : mentionsCsv.Split(',').Select(m => m.Trim()).ToArray();
                 var result = await ChatService.SendAsync(chatId, message, contentType, mentions);
+                OutputService.Print(result);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildSendImage(Option<string> formatOption)
+    {
+        var chatIdArg = new Argument<string>("chat-id") { Description = "Chat ID" };
+        var imageArg = new Argument<string>("image-path") { Description = "Absolute path to the image file (png, jpg, jpeg, gif, or webp)" };
+        var captionOption = new Option<string?>("--caption") { Description = "Optional caption text displayed above the image" };
+        var cmd = new Command("send-image", "Send an image as an inline attachment in a chat") { chatIdArg, imageArg, captionOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var chatId = parseResult.GetValue(chatIdArg)!;
+            var imagePath = parseResult.GetValue(imageArg)!;
+            var caption = parseResult.GetValue(captionOption);
+
+            if (!AllowedContactsService.CheckAndPrompt(chatId, "chat"))
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            try
+            {
+                var result = await ChatService.SendImageAsync(chatId, imagePath, caption);
                 OutputService.Print(result);
             }
             catch (ArgumentException ex)
