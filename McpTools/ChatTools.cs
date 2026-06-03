@@ -111,6 +111,25 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
+    [McpServerTool(Name = "chat_send_image"), Description("Send an image file as an inline attachment in a Teams chat. The image is uploaded as hosted content so it renders inline (not as a download link). Supports PNG, JPEG, GIF, and WebP. Chat must be in the allowed contacts list.")]
+    public static async Task<string> SendImage(
+        [Description("Chat ID")] string chatId,
+        [Description("Absolute path to the image file on disk (PNG, JPEG, GIF, or WebP)")] string imagePath,
+        [Description("Optional caption text displayed above the image")] string? caption = null)
+    {
+        if (!AllowedContactsService.CheckAndPrompt(chatId, "chat", interactive: false))
+            return McpGraphHelper.Error("not_allowed", "This chat is not in the allowed contacts list. Ask the user to run 'graph-cli contacts allow <chatId> --actions chat' to add it.");
+
+        try
+        {
+            var result = await ChatService.SendImageAsync(chatId, imagePath, caption);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ArgumentException ex) { return McpGraphHelper.Error("invalid_argument", ex.Message); }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
     [McpServerTool(Name = "chat_send"), Description("Send a message in a Teams chat. Chat must be in the allowed contacts list. To @-mention users (fires Teams notifications), set contentType=html, include <at id=\"N\">Name</at> tags in the message body, and pass a comma-separated emails/AAD IDs list in `mentions` where index N matches the at-tag id.")]
     public static async Task<string> Send(
         [Description("Chat ID")] string chatId,
