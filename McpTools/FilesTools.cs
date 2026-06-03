@@ -56,6 +56,22 @@ public static class FilesTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
+    [McpServerTool(Name = "files_download"), Description("Download a file from OneDrive or SharePoint to the local machine. Returns the local file path and size on success.")]
+    public static async Task<string> Download(
+        [Description("Item ID or sharing URL (https://...sharepoint.com/...)")] string item,
+        [Description("Local output file path (default: original filename in current directory)")] string? outPath = null,
+        [Description("Drive ID (default: current user's OneDrive)")] string? driveId = null,
+        [Description("SharePoint site ID or hostname")] string? site = null)
+    {
+        try
+        {
+            var result = await FileService.DownloadAsync(item, outPath, driveId, site);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
     [McpServerTool(Name = "files_share"), Description("Share a file or folder with others. Recipients must be in the allowed contacts list (use contacts_list to check, or ask the user to run 'graph-cli contacts allow' to add them).")]
     public static async Task<string> Share(
         [Description("Item ID or sharing URL")] string item,
