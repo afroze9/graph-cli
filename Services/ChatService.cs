@@ -382,19 +382,37 @@ public static class ChatService
     public static async Task<object> ReplyAsync(string chatId, string messageId, string message, string contentType, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
+
+        // The Graph API does not expose a /replies endpoint for chat messages
+        // (1:1 or group). The correct approach is to POST a new message to the
+        // chat with a messageReference attachment, which Teams renders as a
+        // native quoted reply indistinguishable from the built-in reply UX.
+        var bodyContent = contentType == "html"
+            ? $"<attachment id=\"{messageId}\"></attachment>{message}"
+            : $"<attachment id=\"{messageId}\"></attachment><p>{System.Net.WebUtility.HtmlEncode(message)}</p>";
+
         var reply = new ChatMessage
         {
             Body = new ItemBody
             {
-                ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
-                Content = message
-            }
+                ContentType = BodyType.Html,
+                Content = bodyContent
+            },
+            Attachments =
+            [
+                new ChatMessageAttachment
+                {
+                    Id = messageId,
+                    ContentType = "messageReference",
+                    Content = $"{{\"messageId\":\"{messageId}\"}}"
+                }
+            ]
         };
 
         if (mentions is { Length: > 0 })
             reply.Mentions = await BuildMentionsAsync(client, message, contentType, mentions);
 
-        var sent = await client.Me.Chats[chatId].Messages[messageId].Replies.PostAsync(reply);
+        var sent = await client.Me.Chats[chatId].Messages.PostAsync(reply);
         ChatCacheService.Upsert(chatId, null, null);
         return new { status = "replied", id = sent?.Id, chatId, messageId };
     }
