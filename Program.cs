@@ -27,7 +27,6 @@ rootCommand.Subcommands.Add(UserCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(MailCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
 rootCommand.Subcommands.Add(CalendarCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
 rootCommand.Subcommands.Add(ChatCommands.Build(GlobalOptions.Format));
-rootCommand.Subcommands.Add(TeamsCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(PresenceCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(TaskCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
 rootCommand.Subcommands.Add(ContactCommands.Build(GlobalOptions.Format));
