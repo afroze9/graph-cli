@@ -1,6 +1,6 @@
 # graph-cli
 
-A .NET global tool for interacting with Microsoft Graph — manage emails, calendar events, Teams chats, Teams channel messages, To Do tasks, presence, user directory, and OneDrive/SharePoint files from the command line or via [MCP](https://modelcontextprotocol.io/) for AI assistants like Claude. Output is JSON by default (`--format table` for human-readable output).
+A .NET global tool for interacting with Microsoft Graph — manage emails, calendar events, Teams chats, To Do tasks, presence, user directory, and OneDrive/SharePoint files from the command line or via [MCP](https://modelcontextprotocol.io/) for AI assistants like Claude. Output is JSON by default (`--format table` for human-readable output).
 
 ## Installation
 
@@ -35,7 +35,6 @@ dotnet tool install -g graph-cli --add-source ./nupkg
    - `Presence.Read.All`
    - `Tasks.ReadWrite`
    - `Files.Read.All`, `Sites.ReadWrite.All` (or `Sites.ReadWrite.All` for page create/update/publish)
-   - `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `ChannelMessage.Send` _(required for Teams channel commands)_
 5. Click **Grant admin consent** (or ask your tenant admin to do this)
 
 ### 2. Configure graph-cli
@@ -85,7 +84,7 @@ Edit your Claude Desktop config file:
       "env": {
         "GRAPH_CLI_TENANT_ID": "<your-tenant-id>",
         "GRAPH_CLI_CLIENT_ID": "<your-client-id>",
-        "GRAPH_CLI_SCOPES": "User.Read,User.ReadBasic.All,Mail.ReadWrite,Mail.Send,Calendars.Read.Shared,Calendars.ReadWrite,Chat.Create,Chat.ReadWrite,ChatMessage.Read,ChatMessage.Send,Presence.Read.All,Tasks.ReadWrite,Files.Read.All,Sites.ReadWrite.All,Team.ReadBasic.All,Channel.ReadBasic.All,ChannelMessage.Read.All,ChannelMessage.Send"
+        "GRAPH_CLI_SCOPES": "User.Read,User.ReadBasic.All,Mail.ReadWrite,Mail.Send,Calendars.Read.Shared,Calendars.ReadWrite,Chat.Create,Chat.ReadWrite,ChatMessage.Read,ChatMessage.Send,Presence.Read.All,Tasks.ReadWrite,Files.Read.All,Sites.ReadWrite.All"
       }
     }
   }
@@ -176,12 +175,6 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | chat send | ✅ | ✅ | `chat_send` |
 | chat send-image | ✅ | ✅ | `chat_send_image` |
 | chat reply | ✅ | ✅ | `chat_reply` |
-| **Teams Channels** | | | |
-| teams list | ✅ | ✅ | `teams_list` |
-| teams channels | ✅ | ✅ | `teams_channels_list` |
-| teams messages | ✅ | ✅ | `teams_channel_messages` |
-| teams send | ✅ | ✅ | `teams_channel_send` |
-| teams reply | ✅ | ✅ | `teams_channel_reply` |
 | **Presence** | | | |
 | presence me | ✅ | ✅ | `presence_me` |
 | presence get | ✅ | ✅ | `presence_get` |
@@ -281,19 +274,7 @@ graph-cli chat send-image <chat-id> --image <path> [--caption <text>]
 graph-cli chat reply <chat-id> <message-id> --message <text> [--content-type text|html] [--mentions <emails>]
 ```
 
-### Teams Channels
-
-> **Note:** Teams channel commands use a different Graph API endpoint (`/teams/{teamId}/channels/...`) from `chat` commands which use the `Me/Chats` API. Use `chat` for 1:1 and group chats; use `teams` for messages inside a Teams channel.
-
-Additional Graph scopes required: `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `ChannelMessage.Send`
-
-```bash
-graph-cli teams list [--top <n>]
-graph-cli teams channels <team-id> [--top <n>]
-graph-cli teams messages <team-id> <channel-id> [--top <n>]
-graph-cli teams send <team-id> <channel-id> --message <text> [--content-type text|html] [--mentions <emails>]
-graph-cli teams reply <team-id> <channel-id> <message-id> --message <text> [--content-type text|html] [--mentions <emails>]
-```
+> **Note:** `chat reply` works for both 1:1 and group chats. It sends a quoted reply using a `messageReference` attachment, which Teams renders as a native reply with the original message quoted above.
 
 ### Presence
 
@@ -390,8 +371,7 @@ Services/           ← Core logic (Graph SDK calls)
   ├── UserService.cs
   ├── MailService.cs
   ├── CalendarService.cs
-  ├── ChatService.cs      (1:1 and group chats — Me/Chats API)
-  ├── TeamsService.cs     (Teams channel messages — /teams API)
+  ├── ChatService.cs
   ├── FileService.cs
   ├── ...
   │
@@ -399,14 +379,12 @@ Commands/           ← CLI layer (arg parsing, output formatting)
   ├── UserCommands.cs
   ├── MailCommands.cs
   ├── ChatCommands.cs
-  ├── TeamsCommands.cs
   ├── ...
   │
 McpTools/           ← MCP layer (JSON serialization, tool registration)
   ├── UserTools.cs
   ├── MailTools.cs
   ├── ChatTools.cs
-  ├── TeamsTools.cs
   ├── FilesTools.cs
   ├── ...
 ```
