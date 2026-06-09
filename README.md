@@ -173,6 +173,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | chat members | ✅ | ✅ | `chat_members` |
 | chat messages | ✅ | ✅ | `chat_messages` |
 | chat send | ✅ | ✅ | `chat_send` |
+| chat send-image | ✅ | ✅ | `chat_send_image` |
 | chat reply | ✅ | ✅ | `chat_reply` |
 | **Presence** | | | |
 | presence me | ✅ | ✅ | `presence_me` |
@@ -190,7 +191,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | files get | ✅ | ✅ | `files_get` |
 | files search | ✅ | ✅ | `files_search` |
 | files share | ✅ | ✅ | `files_share` |
-| files download | ✅ | — | — |
+| files download | ✅ | ✅ | `files_download` |
 | **Contacts (Allow-List)** | | | |
 | contacts list | ✅ | ✅ | `contacts_list` |
 | contacts allow | ✅ | ✅ | `contacts_allow` |
@@ -219,7 +220,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | lists items | ✅ | ✅ | `lists_items` |
 | lists columns | ✅ | ✅ | `lists_columns` |
 
-> Commands marked **—** in MCP are either interactive-only (`auth login`, `auth logout`) or involve file system operations (`download-attachment`, `files download`) that don't translate to the MCP context.
+> Commands marked **—** in MCP are either interactive-only (`auth login`, `auth logout`) or involve file system write operations (`download-attachment`) that require explicit user confirmation outside the MCP context.
 
 ### Mail
 
@@ -269,8 +270,11 @@ graph-cli chat create --members <emails> [--topic <text>] [--type oneOnOne|group
 graph-cli chat members <chat-id>
 graph-cli chat messages <chat-id> [--top <n>]
 graph-cli chat send <chat-id> --message <text> [--content-type text|html] [--mentions <emails>]
+graph-cli chat send-image <chat-id> --image <path> [--caption <text>]
 graph-cli chat reply <chat-id> <message-id> --message <text> [--content-type text|html] [--mentions <emails>]
 ```
+
+> **Note:** `chat reply` works for both 1:1 and group chats. It sends a quoted reply using a `messageReference` attachment, which Teams renders as a native reply with the original message quoted above.
 
 ### Presence
 
@@ -367,16 +371,21 @@ Services/           ← Core logic (Graph SDK calls)
   ├── UserService.cs
   ├── MailService.cs
   ├── CalendarService.cs
+  ├── ChatService.cs
+  ├── FileService.cs
   ├── ...
   │
 Commands/           ← CLI layer (arg parsing, output formatting)
   ├── UserCommands.cs
   ├── MailCommands.cs
+  ├── ChatCommands.cs
   ├── ...
   │
 McpTools/           ← MCP layer (JSON serialization, tool registration)
   ├── UserTools.cs
   ├── MailTools.cs
+  ├── ChatTools.cs
+  ├── FilesTools.cs
   ├── ...
 ```
 
