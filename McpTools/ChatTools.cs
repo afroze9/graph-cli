@@ -98,7 +98,7 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "chat_messages"), Description("List messages in a Teams chat")]
+    [McpServerTool(Name = "chat_messages"), Description("List messages in a Teams chat. Each message includes a reactions array (emoji reactions such as a 👍 thumbs-up, reported with reactionType, the reacting user's id, and the timestamp) — useful for detecting when someone acknowledged a message with a reaction rather than a text reply.")]
     public static async Task<string> Messages(
         [Description("Chat ID")] string chatId,
         [Description("Number of messages to retrieve (default: 20)")] int top = 20)
