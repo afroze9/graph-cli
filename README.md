@@ -276,6 +276,8 @@ graph-cli chat reply <chat-id> <message-id> --message <text> [--content-type tex
 
 > **Note:** `chat reply` works for both 1:1 and group chats. It sends a quoted reply using a `messageReference` attachment, which Teams renders as a native reply with the original message quoted above.
 
+> **Note:** `chat messages` includes a `reactions` array on each message, listing any emoji reactions (e.g. a 👍 thumbs-up). Each reaction reports `reactionType` (the emoji), `displayName` (a friendly label such as `Like`), `createdDateTime`, and `userId` (the AAD id of who reacted). This lets you detect when someone acknowledged a message with a reaction rather than a text reply.
+
 ### Presence
 
 ```bash
