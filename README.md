@@ -55,10 +55,38 @@ Or set environment variables `GRAPH_CLI_TENANT_ID` and `GRAPH_CLI_CLIENT_ID` ins
 ```bash
 graph-cli auth login    # Opens browser for interactive auth (only needed once)
 graph-cli auth status   # Check if authenticated
+graph-cli auth list     # List all configured profiles
 graph-cli auth logout   # Clear cached tokens
 ```
 
 Tokens are cached at `~/.graph-cli/token-cache.bin` and auto-refresh silently — you won't need to log in again unless you explicitly log out.
+
+### Profiles (multiple accounts)
+
+Every account is a named **profile**. If you never name one, everything uses the profile `default`, so single-account users can ignore this entirely.
+
+There is **no stateful "active account" to switch** — you select a profile per invocation, and it never mutates shared state. This means two shells (or two MCP servers) can use two different accounts at the same time without interfering. Selection precedence:
+
+```
+--profile <name>   >   GRAPH_CLI_PROFILE env var   >   "default"
+```
+
+```bash
+# Log in a second account under a named profile
+graph-cli auth login --profile work --tenant <tenant-id> --client <client-id>
+
+# Use a specific profile for one command
+graph-cli mail list --profile work
+
+# Or set it for a whole shell session (no persisted state, no switch-back)
+export GRAPH_CLI_PROFILE=work
+graph-cli mail list
+
+# See every profile and which one the current invocation resolves to
+graph-cli auth list
+```
+
+Each profile is pinned to its Microsoft identity at login, so profiles that share one app registration still resolve deterministically.
 
 ## Using as an MCP Server (Claude Desktop, Cursor, etc.)
 
@@ -68,40 +96,69 @@ graph-cli includes a built-in [MCP (Model Context Protocol)](https://modelcontex
 
 Follow [step 1 from Setup](#1-register-an-azure-ad-app) above if you haven't already.
 
-### 2. Add to Claude Desktop
+### 2. Log in first
+
+Authenticate each account once from a terminal so its profile and tokens are cached (see [Profiles](#profiles-multiple-accounts)):
+
+```bash
+graph-cli auth login                                                   # → "default" profile
+graph-cli auth login --profile work --tenant <id> --client <id>       # → a second account
+```
+
+The MCP server reuses these cached profiles; it never prompts for login itself.
+
+### 3. Add to Claude Desktop
 
 Edit your Claude Desktop config file:
 
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
+Bind **one server per account** and select the profile with `--profile`:
+
 ```json
 {
   "mcpServers": {
     "graph-cli": {
       "command": "graph-cli",
-      "args": ["mcp"],
-      "env": {
-        "GRAPH_CLI_TENANT_ID": "<your-tenant-id>",
-        "GRAPH_CLI_CLIENT_ID": "<your-client-id>",
-        "GRAPH_CLI_SCOPES": "User.Read,User.ReadBasic.All,Mail.ReadWrite,Mail.Send,Calendars.Read.Shared,Calendars.ReadWrite,Chat.Create,Chat.ReadWrite,ChatMessage.Read,ChatMessage.Send,Presence.Read.All,Tasks.ReadWrite,Files.Read.All,Sites.ReadWrite.All"
-      }
+      "args": ["mcp", "--profile", "default"]
+    },
+    "graph-cli-work": {
+      "command": "graph-cli",
+      "args": ["mcp", "--profile", "work"]
     }
   }
 }
 ```
 
-No `config.json` needed — the MCP config provides everything. On first tool call, a browser window will open for Microsoft login. After that, tokens are cached and refresh automatically.
+Each server is pinned to a single account for its whole lifetime — no state switching. Their tools are namespaced by the server label (`graph-cli` → `mcp__graph-cli__*`, `graph-cli-work` → `mcp__graph-cli-work__*`), so the assistant picks the account by choosing the tool. If you only have one account, keep the single `graph-cli` entry and drop `--profile` (it defaults to `default`).
 
-### 3. Restart Claude Desktop
+> **Zero-config bootstrap:** if you'd rather not run `auth login` first, you can instead supply `GRAPH_CLI_TENANT_ID` and `GRAPH_CLI_CLIENT_ID` in the server's `env` block. A browser window opens for login on the first tool call. This path is single-account only; use profiles (above) for multiple accounts.
 
-You should see graph-cli tools available. Ask Claude something like "What's my email address?" or "Show my calendar for today" to verify.
+### 4. Add to Claude Code
+
+Register the server with the `claude mcp add` command — same binary, same `--profile` flag:
+
+```bash
+# Default account
+claude mcp add graph-cli -- graph-cli mcp --profile default
+
+# A second account, as its own server
+claude mcp add graph-cli-work -- graph-cli mcp --profile work
+```
+
+This writes to your Claude Code MCP config (use `-s user` to make it global across projects). Verify with `claude mcp list`. As in Desktop, each entry is one account and tools are namespaced by the server name.
+
+### 5. Restart the client
+
+Restart Claude Desktop (or reload Claude Code) and you should see graph-cli tools available. Ask something like "What's my email address?" or "Show my calendar for today" to verify.
 
 ### Troubleshooting
 
-- **"Authentication required"** — Run `graph-cli auth login` in a terminal, then retry.
-- **"No configuration found"** — Check that `GRAPH_CLI_TENANT_ID` and `GRAPH_CLI_CLIENT_ID` are set in your MCP config, or create `~/.graph-cli/config.json` (see [Setup](#2-configure-graph-cli)).
-- **Tools not appearing** — Run `graph-cli auth status` in a terminal to check that auth is working.
+- **"Authentication required" / "No cached token"** — Run `graph-cli auth login` (add `--profile <name>` for a named account) in a terminal, then retry.
+- **"Profile '<name>' not found"** — The server's `--profile` doesn't match a logged-in profile. Run `graph-cli auth list` to see configured profiles, and `graph-cli auth login --profile <name> --tenant <id> --client <id>` to add it.
+- **"isn't pinned to an identity"** — A profile migrated from an older single-account config has multiple identities in the token cache. Run `graph-cli auth login --profile <name>` once to pin the correct one.
+- **Tools not appearing** — Run `graph-cli auth status --profile <name>` in a terminal to confirm that profile authenticates.
 
 ## Quick Start
 
@@ -131,6 +188,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | **Auth** | | | |
 | auth login | ✅ | — | — |
 | auth status | ✅ | ✅ | `auth_status` |
+| auth list | ✅ | — | — |
 | auth logout | ✅ | — | — |
 | **User** | | | |
 | user me | ✅ | ✅ | `user_me` |
@@ -397,11 +455,13 @@ McpTools/           ← MCP layer (JSON serialization, tool registration)
 |---|---|
 | `--format json\|table` | Output format (default: `json`) |
 | `--timezone <tz>` | Timezone for datetime I/O — accepts IANA (e.g. `Asia/Karachi`) or Windows IDs (e.g. `Pakistan Standard Time`). Defaults to system local timezone. |
+| `--profile <name>` | Account profile to use for this invocation. Overrides `GRAPH_CLI_PROFILE`; defaults to `default`. |
 
 ## Environment Variables
 
 | Variable | Description |
 |---|---|
+| `GRAPH_CLI_PROFILE` | Account profile to use when `--profile` is not passed (default: `default`) |
 | `GRAPH_CLI_TENANT_ID` | Azure AD tenant ID (alternative to config.json) |
 | `GRAPH_CLI_CLIENT_ID` | Azure AD client/application ID (alternative to config.json) |
 | `GRAPH_CLI_SCOPES` | Comma-separated Microsoft Graph scopes (default: all required scopes) |

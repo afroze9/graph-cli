@@ -20,9 +20,10 @@ if (!ConsentGate.Allows(args))
 var rootCommand = new RootCommand("Microsoft Graph CLI - manage mail, calendar, chat, tasks, and more");
 rootCommand.Options.Add(GlobalOptions.Format);
 rootCommand.Options.Add(GlobalOptions.TimeZone);
+rootCommand.Options.Add(GlobalOptions.Profile);
 
 rootCommand.Subcommands.Add(ConsentCommands.Build());
-rootCommand.Subcommands.Add(AuthCommands.Build());
+rootCommand.Subcommands.Add(AuthCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(UserCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(MailCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
 rootCommand.Subcommands.Add(CalendarCommands.Build(GlobalOptions.Format, GlobalOptions.TimeZone));
@@ -36,7 +37,14 @@ rootCommand.Subcommands.Add(SitesCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(ListsCommands.Build(GlobalOptions.Format));
 rootCommand.Subcommands.Add(McpCommand.Build());
 
-return await rootCommand.Parse(args).InvokeAsync();
+var parseResult = rootCommand.Parse(args);
+
+// Pin this process to a single account profile (flag > env > "default"), resolved once.
+// No runtime state is mutated: bind one profile per process instead of switching.
+if (parseResult.GetValue(GlobalOptions.Profile) is { Length: > 0 } selectedProfile)
+    AuthService.Profile = selectedProfile;
+
+return await parseResult.InvokeAsync();
 
 internal static class ConsentGate
 {
