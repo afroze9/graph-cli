@@ -283,6 +283,20 @@ public static class ChatService
                 a.Name,
                 a.ContentUrl,
                 a.Content
+            }).ToList(),
+            // Emoji reactions on this message (e.g. a 👍 thumbs-up). reactionType is the
+            // Unicode emoji (or a backward-compatible name such as "like"/"heart"); the
+            // reaction's own displayName is a friendly label ("Yes", "Heart"). Graph
+            // populates the reacting user's id here but leaves userDisplayName null on the
+            // list-messages endpoint, so userId is the reliable identifier of who reacted
+            // (resolve it to a name via user_get if needed).
+            Reactions = m.Reactions?.Select(r => new
+            {
+                r.ReactionType,
+                r.DisplayName,
+                r.CreatedDateTime,
+                UserId = r.User?.User?.Id,
+                UserDisplayName = r.User?.User?.DisplayName
             }).ToList()
         }).ToList()!;
     }
