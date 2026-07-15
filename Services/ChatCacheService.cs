@@ -8,6 +8,7 @@ public static class ChatCacheService
     private static readonly string ConfigDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".graph-cli");
     private static readonly string CachePath = Path.Combine(ConfigDir, "chat-cache.json");
+    private static readonly string WatermarkPath = Path.Combine(ConfigDir, "chat-since-watermark.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -96,6 +97,37 @@ public static class ChatCacheService
             .ToList();
     }
 
+    /// <summary>
+    /// Read the persisted "since" watermark — the createdDateTime of the newest chat
+    /// message returned by the last `chat since` run. Returns null if none stored yet.
+    /// Used so automation can pull only messages that have arrived since the previous poll.
+    /// </summary>
+    public static DateTimeOffset? GetWatermark()
+    {
+        if (!File.Exists(WatermarkPath))
+            return null;
+        try
+        {
+            var json = File.ReadAllText(WatermarkPath);
+            return JsonSerializer.Deserialize<ChatSinceWatermark>(json, JsonOptions)?.Watermark;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Persist the "since" watermark (the newest message timestamp seen this run) so the
+    /// next `chat since --continue` picks up exactly where this run left off.
+    /// </summary>
+    public static void SaveWatermark(DateTimeOffset watermark)
+    {
+        Directory.CreateDirectory(ConfigDir);
+        var payload = new ChatSinceWatermark { Watermark = watermark, UpdatedAt = DateTimeOffset.UtcNow };
+        File.WriteAllText(WatermarkPath, JsonSerializer.Serialize(payload, JsonOptions));
+    }
+
     private static bool Matches(CachedChat c, string query)
     {
         if (!string.IsNullOrEmpty(c.Name) && c.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
@@ -126,6 +158,12 @@ public record ChatCacheEntry(
 public class ChatCache
 {
     public List<CachedChat> Chats { get; set; } = [];
+}
+
+public class ChatSinceWatermark
+{
+    public DateTimeOffset? Watermark { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 public class CachedChat

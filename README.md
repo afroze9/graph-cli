@@ -20,6 +20,88 @@ dotnet pack -o ./nupkg
 dotnet tool install -g graph-cli --add-source ./nupkg
 ```
 
+## Upgrading from 2.x to 3.x
+
+Version 3.0 replaced the stateful "active account" model with **stateless per-invocation profiles**. If you only ever used a single account, the upgrade is transparent — your existing login keeps working and everything resolves to the `default` profile. If you used **multiple accounts** (or run graph-cli as an MCP server), read this section: the way you select an account has changed, and there are breaking removals.
+
+### What changed and why
+
+In 2.x there was one mutable "active account" pointer. You changed accounts with `auth switch`, which rewrote shared state on disk — so two terminals (or two MCP servers) could never use two different accounts at once, and a background switch could yank the account out from under a running command.
+
+In 3.x there is **no active-account state to switch**. Each invocation picks its account independently, with this precedence:
+
+```
+--profile <name>   >   GRAPH_CLI_PROFILE env var   >   "default"
+```
+
+Two shells, or two MCP servers, can now use two different accounts simultaneously with zero interference.
+
+### Breaking changes
+
+| 2.x | 3.x | Action needed |
+|---|---|---|
+| `graph-cli auth switch <account>` | *(removed)* | Select per command with `--profile <name>`, or set `GRAPH_CLI_PROFILE` for the shell. |
+| Named accounts (e.g. `auth login <name>`) | Named **profiles** (`auth login --profile <name>`) | Your accounts carry over as profiles of the same name; no re-login needed unless prompted to re-pin (below). |
+| `auth status` returned the active account | `auth status` reports the **resolved profile** (new `profile` field; add `--profile` to inspect a specific one) | Update any scripts that parse `auth status` output. |
+| `config.json` had an `ActiveAccount` field | Field dropped | Ignored automatically — nothing to do. |
+
+### Config migration (automatic)
+
+Your `~/.graph-cli/config.json` and token cache (`token-cache.bin`) migrate in place on first run of 3.x — **no manual edits**:
+
+- A **legacy single-account** config (`{ tenantId, clientId, scopes }`) is rewritten into a multi-profile store under the `default` profile.
+- Existing named accounts become profiles of the same name.
+
+**One caveat:** if several of your accounts shared a single app registration, the token cache holds multiple identities that a migrated profile can't tell apart, and you'll see:
+
+```
+Profile '<name>' isn't pinned to an identity and the token cache holds N accounts.
+```
+
+Fix it once per affected profile — this re-pins it to the right identity (no app re-registration):
+
+```bash
+graph-cli auth login --profile <name>
+```
+
+Confirm everything landed with `graph-cli auth list` (shows every profile and which one the current invocation resolves to).
+
+### Migrating your MCP config (Claude Desktop / Claude Code)
+
+This is the biggest change for AI-assistant users. In 2.x a single MCP server followed the active account, and you changed accounts by running `auth switch` out-of-band. In 3.x you **bind one MCP server per account** and pin it with `mcp --profile <name>`; the assistant chooses the account by choosing the tool (tools are namespaced by server label). See [Using as an MCP Server](#using-as-an-mcp-server-claude-desktop-cursor-etc) for the full walkthrough — the short version:
+
+**Claude Desktop** (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```jsonc
+{
+  "mcpServers": {
+    // 2.x — single server, account chosen by out-of-band `auth switch`:
+    // "graph-cli": { "command": "graph-cli", "args": ["mcp"] }
+
+    // 3.x — one entry per account, each pinned to a profile:
+    "graph-cli": {
+      "command": "graph-cli",
+      "args": ["mcp", "--profile", "default"]
+    },
+    "graph-cli-work": {
+      "command": "graph-cli",
+      "args": ["mcp", "--profile", "work"]
+    }
+  }
+}
+```
+
+**Claude Code** — re-add each account as its own server:
+
+```bash
+claude mcp add graph-cli      -- graph-cli mcp --profile default
+claude mcp add graph-cli-work -- graph-cli mcp --profile work    # add -s user to make it global
+```
+
+Tools are namespaced by server name (`graph-cli` → `mcp__graph-cli__*`, `graph-cli-work` → `mcp__graph-cli-work__*`). If you only have one account, keep the single `graph-cli` entry and drop `--profile` (it defaults to `default`). Restart the client after editing.
+
+> **Tip:** log each profile in from a terminal (`graph-cli auth login --profile <name> ...`) before pointing an MCP server at it — the server reuses cached profiles and never prompts for login itself.
+
 ## Setup (First-Time Users)
 
 ### 1. Register an Azure AD App
@@ -230,6 +312,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | chat create | ✅ | ✅ | `chat_create` |
 | chat members | ✅ | ✅ | `chat_members` |
 | chat messages | ✅ | ✅ | `chat_messages` |
+| chat since | ✅ | ✅ | `chat_since` |
 | chat send | ✅ | ✅ | `chat_send` |
 | chat send-image | ✅ | ✅ | `chat_send_image` |
 | chat reply | ✅ | ✅ | `chat_reply` |
@@ -327,6 +410,7 @@ graph-cli chat get <chat-id>
 graph-cli chat create --members <emails> [--topic <text>] [--type oneOnOne|group]
 graph-cli chat members <chat-id>
 graph-cli chat messages <chat-id> [--top <n>]
+graph-cli chat since [--since <when>] [--continue] [--max-chats <n>] [--include-system] [--exclude-own] [--no-save-watermark]
 graph-cli chat send <chat-id> --message <text> [--content-type text|html] [--mentions <emails>]
 graph-cli chat send-image <chat-id> --image <path> [--caption <text>]
 graph-cli chat reply <chat-id> <message-id> --message <text> [--content-type text|html] [--mentions <emails>]
@@ -335,6 +419,8 @@ graph-cli chat reply <chat-id> <message-id> --message <text> [--content-type tex
 > **Note:** `chat reply` works for both 1:1 and group chats. It sends a quoted reply using a `messageReference` attachment, which Teams renders as a native reply with the original message quoted above.
 
 > **Note:** `chat messages` includes a `reactions` array on each message, listing any emoji reactions (e.g. a 👍 thumbs-up). Each reaction reports `reactionType` (the emoji), `displayName` (a friendly label such as `Like`), `createdDateTime`, and `userId` (the AAD id of who reacted). This lets you detect when someone acknowledged a message with a reaction rather than a text reply.
+
+> **Note:** `chat since` fetches every new message across *all* your Teams chats since a cutoff — built for automation (dump to SQLite/JSON, extract tasks, etc.). `--since` accepts ISO 8601 (`2026-07-15T13:00`), a bare time (`1pm` = today), `today`/`yesterday`, or a relative offset (`-3h`, `-2d`, `-1w`). It enumerates chats by most-recent activity and short-circuits once past the cutoff, so it stays cheap to poll. Each run saves a **watermark** (the newest message timestamp); pass `--continue` (or omit `--since`) next time to fetch only what has arrived since — no overlap, no duplicates. The result is `{ since, chatsScanned, count, watermark, messages[] }` with messages oldest-first; each carries `chatId`, `chatTopic` (topic or participant names), `from`, `createdDateTime`, raw `body` plus an HTML-stripped `text`, and `attachments`. System join/leave/rename events are excluded unless you pass `--include-system`; `--exclude-own` drops your own messages; `--no-save-watermark` leaves the `--continue` cursor untouched (useful for ad-hoc queries).
 
 ### Presence
 

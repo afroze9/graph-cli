@@ -301,6 +301,264 @@ public static class ChatService
         }).ToList()!;
     }
 
+    /// <summary>
+    /// Fetch every new chat message across all Teams chats since a given point in time.
+    /// Enumerates chats ordered by most-recent activity and short-circuits once a chat's
+    /// last message predates the cutoff, then pages each qualifying chat's messages
+    /// (newest-first) until it crosses the cutoff. Results are returned oldest-first so
+    /// they can be streamed straight into a DB / task-extraction pipeline.
+    /// </summary>
+    /// <param name="since">
+    /// Cutoff: ISO 8601 (e.g. 2026-07-15T13:00), a bare time ("1pm" = today), "today",
+    /// "yesterday", or a relative offset ("-3h", "30m", "-2d", "-1w"). Ignored when
+    /// <paramref name="useCache"/> is true.
+    /// </param>
+    /// <param name="useCache">Use the stored watermark from the previous run instead of <paramref name="since"/>.</param>
+    /// <param name="maxChats">Cap on how many recently-active chats to scan.</param>
+    /// <param name="includeSystem">Include system event messages (joins/leaves/renames); default only real messages.</param>
+    /// <param name="excludeOwn">Drop messages authored by the signed-in user.</param>
+    /// <param name="saveWatermark">Persist the newest message timestamp as the new watermark for --continue.</param>
+    public static async Task<object> SinceAsync(
+        string? since,
+        bool useCache,
+        int maxChats,
+        bool includeSystem,
+        bool excludeOwn,
+        bool saveWatermark)
+    {
+        DateTimeOffset sinceUtc;
+        if (useCache || string.Equals(since?.Trim(), "last", StringComparison.OrdinalIgnoreCase))
+        {
+            var wm = ChatCacheService.GetWatermark()
+                ?? throw new ArgumentException(
+                    "no cached watermark found. Run once with an explicit --since first (e.g. --since 1pm or --since -3h).");
+            sinceUtc = wm;
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(since))
+                throw new ArgumentException(
+                    "--since is required. Use ISO 8601 (2026-07-15T13:00), a time ('1pm'), 'today', or a relative offset ('-3h', '-2d'). Or pass --continue to resume from the last run.");
+            sinceUtc = ParseSince(since);
+        }
+
+        var client = await GraphClientProvider.CreateAsync();
+
+        string? myId = null;
+        if (excludeOwn)
+        {
+            var me = await client.Me.GetAsync(r => r.QueryParameters.Select = ["id"]);
+            myId = me?.Id;
+        }
+
+        // Enumerate chats ordered by most-recent activity. Because the list is sorted
+        // desc by the last message time, the first chat whose (non-null) last-message
+        // preview predates the cutoff means every chat after it does too — stop there.
+        var chatsToScan = new List<Chat>();
+        var scanned = 0;
+        var stop = false;
+
+        var page = await client.Me.Chats.GetAsync(r =>
+        {
+            r.QueryParameters.Top = Math.Min(50, maxChats);
+            r.QueryParameters.Expand = ["members", "lastMessagePreview"];
+            r.QueryParameters.Orderby = ["lastMessagePreview/createdDateTime desc"];
+            r.QueryParameters.Select = ["id", "topic", "chatType", "lastUpdatedDateTime"];
+        });
+
+        while (page?.Value != null && !stop)
+        {
+            ChatCacheService.UpsertMany(page.Value
+                .Where(c => c.Id != null)
+                .Select(c => new ChatCacheEntry(
+                    c.Id!,
+                    c.Topic,
+                    c.ChatType?.ToString(),
+                    c.Members?.Select(m => new CachedMember
+                    {
+                        DisplayName = m.DisplayName,
+                        Email = (m as AadUserConversationMember)?.Email,
+                        UserId = (m as AadUserConversationMember)?.UserId
+                    }).ToList(),
+                    c.LastUpdatedDateTime)));
+
+            foreach (var chat in page.Value)
+            {
+                var lastMsgAt = chat.LastMessagePreview?.CreatedDateTime;
+                if (lastMsgAt.HasValue && lastMsgAt.Value <= sinceUtc)
+                {
+                    // Sorted desc: nothing newer remains beyond this point.
+                    stop = true;
+                    break;
+                }
+
+                chatsToScan.Add(chat);
+                scanned++;
+                if (scanned >= maxChats) { stop = true; break; }
+            }
+
+            if (stop || string.IsNullOrEmpty(page.OdataNextLink))
+                break;
+
+            page = await client.Me.Chats.WithUrl(page.OdataNextLink).GetAsync();
+        }
+
+        var rows = new List<ChatSinceMessage>();
+        DateTimeOffset? newWatermark = null;
+
+        foreach (var chat in chatsToScan)
+        {
+            var label = ChatLabel(chat, myId);
+            var chatType = chat.ChatType?.ToString();
+
+            var msgPage = await client.Me.Chats[chat.Id].Messages.GetAsync(r =>
+            {
+                r.QueryParameters.Top = 50;
+                r.QueryParameters.Orderby = ["createdDateTime desc"];
+            });
+
+            var chatDone = false;
+            while (msgPage?.Value != null && !chatDone)
+            {
+                foreach (var msg in msgPage.Value)
+                {
+                    var created = msg.CreatedDateTime;
+                    if (created.HasValue && created.Value <= sinceUtc)
+                    {
+                        chatDone = true;
+                        break;
+                    }
+
+                    if (msg.DeletedDateTime != null)
+                        continue;
+
+                    var messageType = msg.MessageType?.ToString() ?? "message";
+                    if (!includeSystem && !string.Equals(messageType, "message", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var fromId = msg.From?.User?.Id;
+                    if (excludeOwn && myId != null && string.Equals(fromId, myId, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (created.HasValue && (newWatermark == null || created.Value > newWatermark.Value))
+                        newWatermark = created.Value;
+
+                    rows.Add(new ChatSinceMessage
+                    {
+                        ChatId = chat.Id,
+                        ChatTopic = label,
+                        ChatType = chatType,
+                        MessageId = msg.Id,
+                        From = msg.From?.User?.DisplayName ?? msg.From?.Application?.DisplayName,
+                        FromUserId = fromId,
+                        CreatedDateTime = created,
+                        LastModifiedDateTime = msg.LastModifiedDateTime,
+                        MessageType = messageType,
+                        BodyType = msg.Body?.ContentType?.ToString(),
+                        Body = msg.Body?.Content,
+                        Text = StripHtml(msg.Body?.Content),
+                        WebUrl = msg.WebUrl,
+                        Attachments = msg.Attachments?.Select(a => new ChatSinceAttachment
+                        {
+                            Id = a.Id,
+                            ContentType = a.ContentType,
+                            Name = a.Name,
+                            ContentUrl = a.ContentUrl
+                        }).ToList()
+                    });
+                }
+
+                if (chatDone || string.IsNullOrEmpty(msgPage.OdataNextLink))
+                    break;
+
+                msgPage = await client.Me.Chats[chat.Id].Messages.WithUrl(msgPage.OdataNextLink).GetAsync();
+            }
+        }
+
+        // Oldest-first: natural order for appending to a DB / running task extraction.
+        var ordered = rows
+            .OrderBy(r => r.CreatedDateTime ?? DateTimeOffset.MinValue)
+            .ToList();
+
+        if (saveWatermark && newWatermark.HasValue)
+            ChatCacheService.SaveWatermark(newWatermark.Value);
+
+        return new
+        {
+            since = sinceUtc,
+            chatsScanned = chatsToScan.Count,
+            count = ordered.Count,
+            watermark = newWatermark ?? ChatCacheService.GetWatermark(),
+            messages = ordered
+        };
+    }
+
+    // Human-friendly label for a chat: the topic if set, otherwise the other
+    // participants' display names (excludes the signed-in user when known).
+    private static string ChatLabel(Chat chat, string? myId)
+    {
+        if (!string.IsNullOrWhiteSpace(chat.Topic))
+            return chat.Topic!;
+
+        var others = chat.Members?
+            .Where(m => myId == null || !string.Equals((m as AadUserConversationMember)?.UserId, myId, StringComparison.OrdinalIgnoreCase))
+            .Select(m => m.DisplayName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+
+        if (others is { Count: > 0 })
+            return string.Join(", ", others);
+
+        return chat.ChatType?.ToString() ?? "chat";
+    }
+
+    // Cheap HTML-to-text for message bodies: drop tags, collapse whitespace, decode entities.
+    private static string? StripHtml(string? html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return html;
+
+        var noTags = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", " ");
+        var decoded = System.Net.WebUtility.HtmlDecode(noTags);
+        return System.Text.RegularExpressions.Regex.Replace(decoded, @"\s+", " ").Trim();
+    }
+
+    private static DateTimeOffset ParseSince(string input)
+    {
+        input = input.Trim();
+        var now = DateTimeOffset.Now;
+
+        if (string.Equals(input, "today", StringComparison.OrdinalIgnoreCase))
+            return new DateTimeOffset(DateTime.Today, now.Offset).ToUniversalTime();
+        if (string.Equals(input, "yesterday", StringComparison.OrdinalIgnoreCase))
+            return new DateTimeOffset(DateTime.Today.AddDays(-1), now.Offset).ToUniversalTime();
+
+        // Relative offset: -3h, 3h, -30m, -2d, -1w (m=minutes, h=hours, d=days, w=weeks).
+        var rel = System.Text.RegularExpressions.Regex.Match(
+            input, @"^-?(\d+)\s*([mhdw])$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (rel.Success)
+        {
+            var n = int.Parse(rel.Groups[1].Value);
+            var span = rel.Groups[2].Value.ToLowerInvariant() switch
+            {
+                "m" => TimeSpan.FromMinutes(n),
+                "h" => TimeSpan.FromHours(n),
+                "d" => TimeSpan.FromDays(n),
+                "w" => TimeSpan.FromDays(7 * n),
+                _ => TimeSpan.Zero
+            };
+            return now.Subtract(span).ToUniversalTime();
+        }
+
+        // ISO 8601 or a bare time like "1pm" / "13:00" (assumed today, local tz).
+        if (DateTimeOffset.TryParse(input, System.Globalization.CultureInfo.CurrentCulture,
+                System.Globalization.DateTimeStyles.AssumeLocal, out var dto))
+            return dto.ToUniversalTime();
+
+        throw new ArgumentException(
+            $"could not parse --since value '{input}'. Use ISO 8601 (2026-07-15T13:00), a time ('1pm'), 'today'/'yesterday', or a relative offset ('-3h', '-2d', '-1w').");
+    }
+
     public static async Task<object> DownloadHostedContentAsync(string chatId, string messageId, string hostedContentId, string outPath)
     {
         var client = await GraphClientProvider.CreateAsync();
@@ -498,4 +756,30 @@ public static class ChatService
         }
         return result;
     }
+}
+
+public class ChatSinceMessage
+{
+    public string? ChatId { get; set; }
+    public string? ChatTopic { get; set; }
+    public string? ChatType { get; set; }
+    public string? MessageId { get; set; }
+    public string? From { get; set; }
+    public string? FromUserId { get; set; }
+    public DateTimeOffset? CreatedDateTime { get; set; }
+    public DateTimeOffset? LastModifiedDateTime { get; set; }
+    public string? MessageType { get; set; }
+    public string? BodyType { get; set; }
+    public string? Body { get; set; }
+    public string? Text { get; set; }
+    public string? WebUrl { get; set; }
+    public List<ChatSinceAttachment>? Attachments { get; set; }
+}
+
+public class ChatSinceAttachment
+{
+    public string? Id { get; set; }
+    public string? ContentType { get; set; }
+    public string? Name { get; set; }
+    public string? ContentUrl { get; set; }
 }

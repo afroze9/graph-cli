@@ -112,6 +112,25 @@ public static class ChatTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
+    [McpServerTool(Name = "chat_since"), Description("Fetch all new Teams chat messages across every chat since a point in time. Enumerates recently-active chats and short-circuits once past the cutoff, so it is cheap to poll. Returns messages oldest-first (chatId, chatTopic, from, createdDateTime, body + HTML-stripped text, attachments) plus a watermark. Designed for automation: store the messages to SQLite/JSON and extract tasks, then poll again with useCache=true to get only what has arrived since.")]
+    public static async Task<string> Since(
+        [Description("Cutoff: ISO 8601 (2026-07-15T13:00), a bare time ('1pm' = today), 'today'/'yesterday', or a relative offset ('-3h', '-2d', '-1w'). Ignored when useCache=true.")] string? since = null,
+        [Description("Resume from the watermark saved by the previous run instead of `since` (incremental poll). Default: false.")] bool useCache = false,
+        [Description("Max recently-active chats to scan (default: 200)")] int maxChats = 200,
+        [Description("Include system event messages such as joins/leaves/renames (default: false)")] bool includeSystem = false,
+        [Description("Drop messages authored by the signed-in user (default: false)")] bool excludeOwn = false,
+        [Description("Do not persist a new watermark, leaving the useCache cursor unchanged (default: false)")] bool noSaveWatermark = false)
+    {
+        try
+        {
+            var result = await ChatService.SinceAsync(since, useCache, maxChats, includeSystem, excludeOwn, saveWatermark: !noSaveWatermark);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ArgumentException ex) { return McpGraphHelper.Error("invalid_argument", ex.Message); }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
     [McpServerTool(Name = "chat_send_image"), Description("Send an image file as an inline attachment in a Teams chat. The image is uploaded as hosted content so it renders inline (not as a download link). Supports PNG, JPEG, GIF, and WebP. Chat must be in the allowed contacts list.")]
     public static async Task<string> SendImage(
         [Description("Chat ID")] string chatId,

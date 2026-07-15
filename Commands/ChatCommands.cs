@@ -19,6 +19,7 @@ public static class ChatCommands
         chatCommand.Subcommands.Add(BuildCreate(formatOption));
         chatCommand.Subcommands.Add(BuildMembers(formatOption));
         chatCommand.Subcommands.Add(BuildMessages(formatOption));
+        chatCommand.Subcommands.Add(BuildSince(formatOption));
         chatCommand.Subcommands.Add(BuildSend(formatOption));
         chatCommand.Subcommands.Add(BuildSendImage(formatOption));
         chatCommand.Subcommands.Add(BuildReply(formatOption));
@@ -199,6 +200,44 @@ public static class ChatCommands
             {
                 var result = await ChatService.MessagesAsync(chatId, top);
                 OutputService.Print(result, format);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static Command BuildSince(Option<string> formatOption)
+    {
+        var sinceOption = new Option<string?>("--since") { Description = "Cutoff: ISO 8601 (2026-07-15T13:00), a time ('1pm'), 'today'/'yesterday', or a relative offset ('-3h', '-2d', '-1w'). Not required with --continue." };
+        var continueOption = new Option<bool>("--continue") { DefaultValueFactory = _ => false, Description = "Resume from the watermark saved by the previous run (ignores --since)" };
+        var maxChatsOption = new Option<int>("--max-chats") { DefaultValueFactory = _ => 200, Description = "Max recently-active chats to scan" };
+        var includeSystemOption = new Option<bool>("--include-system") { DefaultValueFactory = _ => false, Description = "Include system event messages (joins/leaves/renames)" };
+        var excludeOwnOption = new Option<bool>("--exclude-own") { DefaultValueFactory = _ => false, Description = "Drop messages you sent yourself" };
+        var noSaveOption = new Option<bool>("--no-save-watermark") { DefaultValueFactory = _ => false, Description = "Do not persist a new watermark (leaves --continue cursor unchanged)" };
+        var cmd = new Command("since", "Fetch all new chat messages across every Teams chat since a given time. Cache-backed watermark supports incremental polling for automation (store to SQLite/JSON, extract tasks, etc.).")
+            { sinceOption, continueOption, maxChatsOption, includeSystemOption, excludeOwnOption, noSaveOption };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            var format = parseResult.GetValue(formatOption) ?? "json";
+            var since = parseResult.GetValue(sinceOption);
+            var useCache = parseResult.GetValue(continueOption);
+            var maxChats = parseResult.GetValue(maxChatsOption);
+            var includeSystem = parseResult.GetValue(includeSystemOption);
+            var excludeOwn = parseResult.GetValue(excludeOwnOption);
+            var saveWatermark = !parseResult.GetValue(noSaveOption);
+            try
+            {
+                var result = await ChatService.SinceAsync(since, useCache, maxChats, includeSystem, excludeOwn, saveWatermark);
+                OutputService.Print(result, format);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {
