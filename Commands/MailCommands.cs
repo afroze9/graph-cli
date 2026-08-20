@@ -16,6 +16,7 @@ public static class MailCommands
         mailCommand.Subcommands.Add(BuildSend(formatOption));
         mailCommand.Subcommands.Add(BuildDraft(formatOption));
         mailCommand.Subcommands.Add(BuildSendDraft(formatOption));
+        mailCommand.Subcommands.Add(BuildMentions(formatOption));
         mailCommand.Subcommands.Add(BuildReply(formatOption, replyAll: false));
         mailCommand.Subcommands.Add(BuildReply(formatOption, replyAll: true));
         mailCommand.Subcommands.Add(BuildForward(formatOption));
@@ -102,6 +103,31 @@ public static class MailCommands
         return cmd;
     }
 
+    private static Command BuildMentions(Option<string> formatOption)
+    {
+        var messageIdArg = new Argument<string>("message-id") { Description = "Message ID to inspect" };
+        var cmd = new Command("mentions", "Show the @-mentions stored on a message") { messageIdArg };
+        cmd.SetAction(async (parseResult, ct) =>
+        {
+            try
+            {
+                var result = await MailService.MentionsAsync(parseResult.GetValue(messageIdArg)!);
+                OutputService.Print(result);
+            }
+            catch (ODataError ex)
+            {
+                OutputService.PrintError(ex.Error?.Code ?? "error", ex.Error?.Message ?? ex.Message);
+                Environment.ExitCode = 1;
+            }
+        });
+        return cmd;
+    }
+
+    private static string[]? SplitCsv(string? csv) =>
+        string.IsNullOrWhiteSpace(csv)
+            ? null
+            : csv.Split(',').Select(e => e.Trim()).Where(e => e.Length > 0).ToArray();
+
     private static Command BuildSend(Option<string> formatOption)
     {
         var toOption = new Option<string>("--to") { Description = "Comma-separated recipient emails", Required = true };
@@ -110,15 +136,20 @@ public static class MailCommands
         var ccOption = new Option<string?>("--cc") { Description = "Comma-separated CC emails" };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
         var attachmentOption = new Option<string[]>("--attachment") { Description = "File path(s) to attach (can be specified multiple times)", Arity = ArgumentArity.ZeroOrMore };
-        var cmd = new Command("send", "Send an email") { toOption, subjectOption, bodyOption, ccOption, contentTypeOption, attachmentOption };
+        var mentionsOption = new Option<string?>("--mentions") { Description = "Comma-separated emails to @-mention (requires --content-type html; body must contain <at id=\"N\">Name</at> tags). Mentioned people are added to the To line." };
+        var cmd = new Command("send", "Send an email") { toOption, subjectOption, bodyOption, ccOption, contentTypeOption, attachmentOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var to = parseResult.GetValue(toOption)!;
             var cc = parseResult.GetValue(ccOption);
+            var mentions = SplitCsv(parseResult.GetValue(mentionsOption));
 
             var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
             if (!string.IsNullOrEmpty(cc))
                 allRecipients.AddRange(cc.Split(',').Select(e => e.Trim()));
+            // Mentioned people become recipients, so they pass the same gate.
+            if (mentions != null)
+                allRecipients.AddRange(mentions);
 
             if (!AllowedContactsService.CheckAllAndPrompt(allRecipients, "email"))
             {
@@ -135,8 +166,14 @@ public static class MailCommands
                     parseResult.GetValue(bodyOption)!,
                     cc,
                     parseResult.GetValue(contentTypeOption) ?? "text",
-                    attachments);
+                    attachments,
+                    mentions);
                 OutputService.Print(result);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (FileNotFoundException ex)
             {
@@ -158,11 +195,17 @@ public static class MailCommands
         var subjectOption = new Option<string>("--subject") { Description = "Email subject", Required = true };
         var bodyOption = new Option<string>("--body") { Description = "Email body", Required = true };
         var contentTypeOption = new Option<string>("--content-type") { DefaultValueFactory = _ => "text", Description = "Body content type: text or html" };
-        var cmd = new Command("draft", "Create a draft email") { toOption, subjectOption, bodyOption, contentTypeOption };
+        var mentionsOption = new Option<string?>("--mentions") { Description = "Comma-separated emails to @-mention (requires --content-type html; body must contain <at id=\"N\">Name</at> tags). Mentioned people are added to the To line." };
+        var cmd = new Command("draft", "Create a draft email") { toOption, subjectOption, bodyOption, contentTypeOption, mentionsOption };
         cmd.SetAction(async (parseResult, ct) =>
         {
             var to = parseResult.GetValue(toOption)!;
-            var recipients = to.Split(',').Select(e => e.Trim());
+            var mentions = SplitCsv(parseResult.GetValue(mentionsOption));
+
+            var recipients = to.Split(',').Select(e => e.Trim()).ToList();
+            if (mentions != null)
+                recipients.AddRange(mentions);
+
             if (!AllowedContactsService.CheckAllAndPrompt(recipients, "email"))
             {
                 Environment.ExitCode = 1;
@@ -175,8 +218,14 @@ public static class MailCommands
                     to,
                     parseResult.GetValue(subjectOption)!,
                     parseResult.GetValue(bodyOption)!,
-                    parseResult.GetValue(contentTypeOption) ?? "text");
+                    parseResult.GetValue(contentTypeOption) ?? "text",
+                    mentions);
                 OutputService.Print(result);
+            }
+            catch (ArgumentException ex)
+            {
+                OutputService.PrintError("invalid_argument", ex.Message);
+                Environment.ExitCode = 1;
             }
             catch (ODataError ex)
             {

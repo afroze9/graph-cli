@@ -16,6 +16,12 @@ public static class McpGraphHelper
     public static string ToJson(object? data) =>
         JsonSerializer.Serialize(data, JsonOptions);
 
+    /// <summary>Splits a comma-separated tool argument, trimming blanks. Null when empty.</summary>
+    public static string[]? SplitCsv(string? csv) =>
+        string.IsNullOrWhiteSpace(csv)
+            ? null
+            : csv.Split(',').Select(e => e.Trim()).Where(e => e.Length > 0).ToArray();
+
     public static string Error(string code, string message)
     {
         Console.Error.WriteLine($"[graph-cli] {code}: {message}");

@@ -1,5 +1,7 @@
+using System.Text.Json.Nodes;
 using Microsoft.Graph.Me.SendMail;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Serialization.Json;
 
 namespace GraphCli.Services;
 
@@ -78,9 +80,20 @@ public static class MailService
         }).ToList() ?? [];
     }
 
-    public static async Task<object> SendAsync(string to, string subject, string body, string? cc, string contentType, string[]? attachments = null)
+    public static async Task<object> SendAsync(string to, string subject, string body, string? cc, string contentType, string[]? attachments = null, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
+
+        MentionPlan? plan = null;
+        if (mentions is { Length: > 0 })
+        {
+            plan = await MailMentionService.BuildAsync(client, body, contentType, mentions);
+            body = plan.Body;
+        }
+
+        var toList = SplitAddresses(to);
+        AddMentionedRecipients(toList, plan);
+
         var message = new Message
         {
             Subject = subject,
@@ -89,9 +102,9 @@ public static class MailService
                 ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
                 Content = body
             },
-            ToRecipients = to.Split(',').Select(e => new Recipient
+            ToRecipients = toList.Select(e => new Recipient
             {
-                EmailAddress = new EmailAddress { Address = e.Trim() }
+                EmailAddress = new EmailAddress { Address = e }
             }).ToList()
         };
 
@@ -107,12 +120,91 @@ public static class MailService
         if (fileAttachments != null)
             message.Attachments = fileAttachments;
 
-        await client.Me.SendMail.PostAsync(new SendMailPostRequestBody
+        if (plan == null)
         {
-            Message = message,
-            SaveToSentItems = true
+            await client.Me.SendMail.PostAsync(new SendMailPostRequestBody
+            {
+                Message = message,
+                SaveToSentItems = true
+            });
+            return new { status = "sent", subject, to };
+        }
+
+        // Mentions are a /beta-only property of message, so this one goes out as raw JSON.
+        await GraphBetaClient.PostAsync("/me/sendMail", new JsonObject
+        {
+            ["message"] = ToJsonWithMentions(message, plan.Targets),
+            ["saveToSentItems"] = true
         });
-        return new { status = "sent", subject, to };
+        return new
+        {
+            status = "sent",
+            subject,
+            to = string.Join(",", toList),
+            mentioned = plan.Targets.Select(t => t.Address).ToArray()
+        };
+    }
+
+    /// <summary>
+    /// Lists the @-mentions stored on a message. Reads /beta, because `mentions` and
+    /// `mentionsPreview` do not exist on the v1.0 message type.
+    /// </summary>
+    public static async Task<object> MentionsAsync(string messageId)
+    {
+        var path = $"/me/messages/{Uri.EscapeDataString(messageId)}?$expand=mentions&$select=id,subject,mentionsPreview";
+        var msg = await GraphBetaClient.GetAsync(path);
+
+        var mentions = msg?["mentions"] as JsonArray;
+        return new
+        {
+            id = msg?["id"]?.GetValue<string>(),
+            subject = msg?["subject"]?.GetValue<string>(),
+            isMentioned = msg?["mentionsPreview"]?["isMentioned"]?.GetValue<bool>(),
+            count = mentions?.Count ?? 0,
+            mentions = mentions?.Select(m => new
+            {
+                id = m?["id"]?.GetValue<string>(),
+                name = m?["mentioned"]?["name"]?.GetValue<string>(),
+                address = m?["mentioned"]?["address"]?.GetValue<string>(),
+                createdBy = m?["createdBy"]?["address"]?.GetValue<string>()
+            }).ToList()
+        };
+    }
+
+    private static List<string> SplitAddresses(string csv) =>
+        csv.Split(',').Select(e => e.Trim()).Where(e => e.Length > 0).ToList();
+
+    // A mention only notifies when the mentioned person also receives the mail, so put
+    // anyone who is mentioned but not already addressed into the To line.
+    private static void AddMentionedRecipients(List<string> toList, MentionPlan? plan)
+    {
+        if (plan == null) return;
+        foreach (var target in plan.Targets)
+        {
+            if (!toList.Contains(target.Address, StringComparer.OrdinalIgnoreCase))
+                toList.Add(target.Address);
+        }
+    }
+
+    // Serialize an SDK Message with the Kiota JSON writer, then graft on the `mentions`
+    // array the v1.0 models do not carry.
+    private static JsonObject ToJsonWithMentions(Message message, List<MentionTarget> targets)
+    {
+        using var writer = new JsonSerializationWriter();
+        writer.WriteObjectValue(string.Empty, message);
+        using var stream = writer.GetSerializedContent();
+        using var reader = new StreamReader(stream);
+        var json = JsonNode.Parse(reader.ReadToEnd())!.AsObject();
+
+        json["mentions"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
+        {
+            ["mentioned"] = new JsonObject
+            {
+                ["name"] = t.Name,
+                ["address"] = t.Address
+            }
+        }).ToArray());
+        return json;
     }
 
     private static List<Attachment>? BuildFileAttachments(string[]? attachments)
@@ -180,9 +272,20 @@ public static class MailService
         }
     }
 
-    public static async Task<object> DraftAsync(string to, string subject, string body, string contentType)
+    public static async Task<object> DraftAsync(string to, string subject, string body, string contentType, string[]? mentions = null)
     {
         var client = await GraphClientProvider.CreateAsync();
+
+        MentionPlan? plan = null;
+        if (mentions is { Length: > 0 })
+        {
+            plan = await MailMentionService.BuildAsync(client, body, contentType, mentions);
+            body = plan.Body;
+        }
+
+        var toList = SplitAddresses(to);
+        AddMentionedRecipients(toList, plan);
+
         var message = new Message
         {
             Subject = subject,
@@ -191,14 +294,26 @@ public static class MailService
                 ContentType = contentType == "html" ? BodyType.Html : BodyType.Text,
                 Content = body
             },
-            ToRecipients = to.Split(',').Select(e => new Recipient
+            ToRecipients = toList.Select(e => new Recipient
             {
-                EmailAddress = new EmailAddress { Address = e.Trim() }
+                EmailAddress = new EmailAddress { Address = e }
             }).ToList()
         };
 
-        var draft = await client.Me.Messages.PostAsync(message);
-        return new { status = "draft_created", id = draft?.Id, subject };
+        if (plan == null)
+        {
+            var draft = await client.Me.Messages.PostAsync(message);
+            return new { status = "draft_created", id = draft?.Id, subject };
+        }
+
+        var created = await GraphBetaClient.PostAsync("/me/messages", ToJsonWithMentions(message, plan.Targets));
+        return new
+        {
+            status = "draft_created",
+            id = created?["id"]?.GetValue<string>(),
+            subject,
+            mentioned = plan.Targets.Select(t => t.Address).ToArray()
+        };
     }
 
     public static async Task<object> SendDraftAsync(string messageId)

@@ -55,48 +55,71 @@ public static class MailTools
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "mail_send"), Description("Send an email with optional file attachments. Recipients must be in the allowed contacts list (use contacts_list to check, or ask the user to run 'graph-cli contacts allow' to add them).")]
+    [McpServerTool(Name = "mail_send"), Description("Send an email with optional file attachments. Recipients must be in the allowed contacts list (use contacts_list to check, or ask the user to run 'graph-cli contacts allow' to add them). To @-mention people (puts the @ glyph on the mail in their Outlook and makes it show under \"Mentioned mail\"), set contentType=html, include <at id=\"N\">Name</at> tags in the body, and pass a comma-separated email list in `mentions` where index N matches the at-tag id. Mentioned people are added to the To line automatically.")]
     public static async Task<string> Send(
         [Description("Comma-separated recipient email addresses")] string to,
         [Description("Email subject")] string subject,
         [Description("Email body content")] string body,
         [Description("Comma-separated CC email addresses")] string? cc = null,
-        [Description("Body content type: text or html (default: text)")] string contentType = "text",
-        [Description("Comma-separated file paths to attach (e.g. /path/to/report.pdf,/path/to/data.xlsx)")] string? attachments = null)
+        [Description("Body content type: text or html (default: text). Required to be html when mentions is set.")] string contentType = "text",
+        [Description("Comma-separated file paths to attach (e.g. /path/to/report.pdf,/path/to/data.xlsx)")] string? attachments = null,
+        [Description("Comma-separated emails to @-mention. Body must contain <at id=\"N\">Name</at> tags (N is the zero-based index into this list).")] string? mentions = null)
     {
+        var mentionList = McpGraphHelper.SplitCsv(mentions);
+
         var allRecipients = to.Split(',').Select(e => e.Trim()).ToList();
         if (!string.IsNullOrEmpty(cc))
             allRecipients.AddRange(cc.Split(',').Select(e => e.Trim()));
+        // Mentioned people become recipients, so they pass the same gate.
+        if (mentionList != null)
+            allRecipients.AddRange(mentionList);
 
         if (!AllowedContactsService.CheckAllAndPrompt(allRecipients, "email", interactive: false))
             return McpGraphHelper.Error("not_allowed", "One or more recipients are not in the allowed contacts list. Ask the user to run 'graph-cli contacts allow <email> --actions email' to add them.");
 
         try
         {
-            var attachmentPaths = string.IsNullOrEmpty(attachments)
-                ? null
-                : attachments.Split(',').Select(p => p.Trim()).ToArray();
-            var result = await MailService.SendAsync(to, subject, body, cc, contentType, attachmentPaths);
+            var attachmentPaths = McpGraphHelper.SplitCsv(attachments);
+            var result = await MailService.SendAsync(to, subject, body, cc, contentType, attachmentPaths, mentionList);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
         catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
     }
 
-    [McpServerTool(Name = "mail_draft"), Description("Create a draft email. Recipients must be in the allowed contacts list.")]
+    [McpServerTool(Name = "mail_mentions"), Description("List the @-mentions stored on an email message. Returns isMentioned (whether the signed-in user is mentioned) and each mention's name and address. Use it to confirm a mail_send with mentions landed correctly.")]
+    public static async Task<string> Mentions(
+        [Description("The message ID")] string messageId)
+    {
+        try
+        {
+            var result = await MailService.MentionsAsync(messageId);
+            return McpGraphHelper.ToJson(result);
+        }
+        catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }
+        catch (Exception ex) { return McpGraphHelper.HandleException(ex); }
+    }
+
+    [McpServerTool(Name = "mail_draft"), Description("Create a draft email. Recipients must be in the allowed contacts list. Supports @-mentions the same way mail_send does.")]
     public static async Task<string> Draft(
         [Description("Comma-separated recipient email addresses")] string to,
         [Description("Email subject")] string subject,
         [Description("Email body content")] string body,
-        [Description("Body content type: text or html (default: text)")] string contentType = "text")
+        [Description("Body content type: text or html (default: text). Required to be html when mentions is set.")] string contentType = "text",
+        [Description("Comma-separated emails to @-mention. Body must contain <at id=\"N\">Name</at> tags (N is the zero-based index into this list).")] string? mentions = null)
     {
-        var recipients = to.Split(',').Select(e => e.Trim());
+        var mentionList = McpGraphHelper.SplitCsv(mentions);
+
+        var recipients = to.Split(',').Select(e => e.Trim()).ToList();
+        if (mentionList != null)
+            recipients.AddRange(mentionList);
+
         if (!AllowedContactsService.CheckAllAndPrompt(recipients, "email", interactive: false))
             return McpGraphHelper.Error("not_allowed", "One or more recipients are not in the allowed contacts list.");
 
         try
         {
-            var result = await MailService.DraftAsync(to, subject, body, contentType);
+            var result = await MailService.DraftAsync(to, subject, body, contentType, mentionList);
             return McpGraphHelper.ToJson(result);
         }
         catch (ODataError ex) { return McpGraphHelper.HandleODataError(ex); }

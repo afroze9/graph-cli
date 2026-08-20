@@ -294,6 +294,7 @@ All commands are available via both the CLI and the MCP server unless noted othe
 | mail folders | ✅ | ✅ | `mail_folders` |
 | mail attachments | ✅ | ✅ | `mail_attachments` |
 | mail download-attachment | ✅ | — | — |
+| mail mentions | ✅ | ✅ | `mail_mentions` |
 | **Calendar** | | | |
 | calendar list | ✅ | ✅ | `calendar_list` |
 | calendar events | ✅ | ✅ | `calendar_events` |
@@ -369,8 +370,8 @@ All commands are available via both the CLI and the MCP server unless noted othe
 graph-cli mail list [--top <n>] [--folder <name>]
 graph-cli mail get <message-id>
 graph-cli mail search --query <text> [--top <n>]
-graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html] [--attachment <file> ...]
-graph-cli mail draft --to <emails> --subject <text> --body <text>
+graph-cli mail send --to <emails> --subject <text> --body <text> [--cc <emails>] [--content-type text|html] [--attachment <file> ...] [--mentions <emails>]
+graph-cli mail draft --to <emails> --subject <text> --body <text> [--content-type text|html] [--mentions <emails>]
 graph-cli mail send-draft <message-id>
 graph-cli mail reply <message-id> --body <text> [--cc <emails>] [--bcc <emails>] [--content-type text|html] [--attachment <file> ...] [--draft]
 graph-cli mail reply-all <message-id> --body <text> [--cc <emails>] [--bcc <emails>] [--content-type text|html] [--attachment <file> ...] [--draft]
@@ -381,7 +382,53 @@ graph-cli mail delete <message-id> [<id2> ...]
 graph-cli mail folders [--parent <folder-id-or-name>]
 graph-cli mail attachments <message-id>
 graph-cli mail download-attachment <message-id> <attachment-id> [--out <path>]
+graph-cli mail mentions <message-id>
 ```
+
+#### Email @-mentions
+
+`mail send` and `mail draft` can @-mention people, using the same `<at id="N">` syntax as `chat send`. Write the mention in the body and list the addresses in `--mentions`, where `N` is the zero-based index into that list:
+
+```bash
+graph-cli mail send --to team@company.com --subject "Release check" --content-type html \
+  --mentions jane@company.com,ali@company.com \
+  --body '<p><at id="0">Jane</at> and <at id="1">Ali</at> — can you sign off today?</p>'
+```
+
+The CLI rewrites each `<at>` tag into the same anchor Outlook itself writes, and attaches the Graph `mentions` collection:
+
+```html
+<a id="OWAAM<32 hex>" href="mailto:jane@company.com"><span style="text-decoration:none">@Jane</span></a>
+```
+
+**The `id` is load-bearing, and its exact form matters.** This is undocumented, and easy to get wrong. Tested against real mail with five id variants in one message, all pointing at the same address, all backed by the same valid `mentions` record:
+
+| anchor `id` | renders as |
+|---|---|
+| `OWAAM` + 32 uppercase hex | **mention** |
+| `OWA` + 32 hex | plain blue link |
+| 32 hex, no prefix | plain blue link |
+| arbitrary string | plain blue link |
+| no `id` at all | plain blue link |
+
+Only the first form works, and it is what Outlook Web itself writes. The span merely suppresses the underline. Rules:
+
+- `--mentions` needs `--content-type html`.
+- Every index in `--mentions` needs a matching `<at id="N">…</at>` tag in the body, or the command fails.
+- Entries must be email addresses, not AAD ids — a mentioned person is added to the **To** line, so the address is a real recipient.
+- Mentioned addresses pass the same allowed-contacts check as `--to` and `--cc`.
+- The tag text is the label ("Jane"), not the directory display name. The CLI adds the `@` prefix and resolves the real display name for the mention record. The label does not affect rendering: a short "@Jane" renders the same as the full display name.
+
+Keep the two layers separate when this breaks. The `mentions` collection is the documented, supported mechanism, and it drives the **@** glyph and the **Mentioned mail** filter on its own. The anchor markup is an undocumented cosmetic layer on top. If Microsoft changes the id scheme, mentions still work; they just render as ordinary links.
+
+`mail mentions <message-id>` reads the mention records back off any message — use it to confirm a mention landed:
+
+```json
+{ "subject": "Release check", "isMentioned": true, "count": 1,
+  "mentions": [ { "name": "Jane Doe", "address": "jane@company.com" } ] }
+```
+
+> **Note:** Outlook mentions live in the Graph `/beta` endpoint — the v1.0 `message` type has no `mentions` or `mentionsPreview` property. `mail send` and `mail draft` route through `/beta` **only** when `--mentions` is passed, and `mail mentions` always does; every other mail command stays on v1.0.
 
 ### Calendar
 
